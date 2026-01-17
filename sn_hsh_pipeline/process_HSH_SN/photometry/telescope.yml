@@ -1,0 +1,16 @@
+HSH:
+  INSTRUME:
+    Direct CCD:
+      AIRMASS: AIRMASS
+      GAIN: GAIN
+      I: I
+      Name: HSH+Direct CCD
+      RDNOISE: RDNOISE
+      filter_key_0: FILTER
+      filter_key_1: FILTERS
+      pixel_scale: 0.53
+  location:
+    alt: null
+    lat: null
+    lon: null
+    name: null

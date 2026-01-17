@@ -1,0 +1,16 @@
+# Data
+data/
+*.fits
+*.fit
+*.fz
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Env
+.env

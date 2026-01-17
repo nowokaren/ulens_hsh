@@ -1,0 +1,40 @@
+# =========================
+# CONFIGURACIÓN DEL PIPELINE
+# =========================
+
+night: "20250823bis"
+
+paths:
+  BASE: "/home/knowogrodski/Documentos/observation_HSH/process_HSH_SN/pipe_HSH/"
+  data_dir: "data"           
+  objects_dir: "objectos"          
+
+
+instrument:
+  gain: 2.0
+  rdnoise: 15.7
+
+steps:
+  update_headers: false
+  export_metadata: true
+  reduction: false
+  astrometry: false
+  contains_obj: true
+  cleanup: false
+  plots: false
+
+reduction:
+  zero_correction: false
+  flat_correction: false
+  dark_correction: false   # aún no implementado
+
+astrometry:
+  method: "astrometrynet"
+  api_key: "wuupmjpswkcbncws"   # para API externa
+  overwrite: false
+
+metadata:
+  output_file: "images_data.csv"
+
+qc: # quality checks
+  reduction_images: true

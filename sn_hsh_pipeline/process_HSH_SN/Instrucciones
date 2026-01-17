@@ -1,0 +1,77 @@
+process_HSH_SN/
+├── data/
+│   └── objetos.csv/                  ← posiciones de los objetos
+│   └── 20250822/                  ← fecha de la noche
+│      ├── *.fit                  ← imágenes crudas 
+│      ├── FB*.fit                ← calibraciones flats y bias ("FB")
+│      ├── OGLE-2025-BLG-0397/    ← nombre del objeto (una carpeta por objeto)
+│      │   ├── FB*_wcs.fits       ← imágenes con astrometría 
+│      │   ├── *_{filt}_comb.fits  ← imágenes combinadas 
+│      │   ├── comb.py            ← py para combinar    
+│      │   └── aligRAF.py         ← py para alinear  
+│      │   └── phot               ← fotometría del objeto  
+│      └── reduc_vp.py                 ← py para reducir y hacer astrmetria
+└── objetos/
+    └── OGLE-2025-BLG-0397/        ← carpeta global del objeto (fuera de la noche)
+        ├── OGLE-2025-BLG-0397_refpsf.coo     ← estrellas de referencia (lo genera o editamos)
+        └── OGLE-2025-BLG-0397.coo         ← coordenadas del target (opcional, para catálogo)
+
+0. Preparación:
+	- crear dos ambientes en conda:
+		- reduccion, astrometria y combinación
+			- completar con modulos necesarios y detalles
+		- fotometría
+			- autophot_env
+1. Reducción y Astrometría: 
+	- terminal: conda activate hsh_comb
+	- copiar reduc_vp.py en la carpeta de la noche: data/{noche}
+	- terminal en data/{noche}: correr python reduc_vp.py
+	- escribir T en cada pedido de Zero, flats y astrometry.net (enter para pedir no hacerlo)
+		el codigo genera: 
+		- master bias, master flats
+		- para cada imagen guarda la version:
+			- corregida por bias prefijo "B"
+			- corregida por bias y flats con prefijo "FB"
+		- aplica Astrometry.net sobre cada imágen, descarga el wcs, se lo agrega al header de la imagen original y la guarda con sufijo "_wcs" 
+2. Combinación (repetir para cada objeto y cada banda)
+	- Agregar coordenadas de objeto:
+		- original: crear un archivo objetos/objeto/{objeto}.coo con las coordenadas del objeto en HH:mm:ss.s
+		- now: agregar objeto a objetos.csv si no existe
+	- copiar comb.py y aligRAF.py a la carpeta data/noche/objeto/.
+	- en terminal ubicado en dicha carpeta correr: 
+	       conda activate hsh_comb
+	       python comb.py -F I (donde I es la banda a combinar)
+		- primero genera un catalogo de estrellas brillantes para alinear {objecto}_refpsf.coo
+		- crea un la imagen combinada
+		- genera un catalgo de estrellas de gaia para referencia para fotometría {objeto}_cat.csv
+		- genera plots de las imagenes combinadas con las fuentes de cada catalogo.
+
+3. Fotometría
+	- correr en terminal:
+		conda activate autophot_env
+	- abrir archivo Fotometría.ipynb
+	- correr generación de Catalogo de referencia:
+		- carga fuentes de Gaia con las columnas de G, BP y RP.
+		- transforma a I y V
+		- guarda objetos/{objeto}/{objeto}_cat.csv
+	- En la carpeta data/noche/objeto/phot guardar las imágenes a las que se quiere hacer fotometría
+	- Correr primera linea del notebook: settings autophot
+	- segunda linea del notebook: correr autophot
+		- Intenta hacer psf, si falla, hace apertura.
+		- crea data/noche/objeto/phot_REDUCED con imágenes resultantes del catálogo, apertura, etc.
+		- 
+	
+
+	
+Pasos procesamiento:
+- OBJETO: Agregar posicion del objeto a objetos.csv
+- NOCHE:  Reducción Bias + Flats
+- NOCHE:  Plot raw-bias-flat
+- NOCHE:  Astrometría
+- NOCHE:  Objeto dentro del campo de la imagen? Descartar si no.
+- OBJETO: Catálogo para alineación
+- NOCHE:  Combinación
+- OBJETO: Catálogo de fotometría
+- NOCHE:  Plot de combinadas con el catálogo de fotometría 
+- NOCHE:  Fotometría
+- OBJETO: Plot curva de luz.
