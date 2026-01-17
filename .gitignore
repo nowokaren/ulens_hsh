@@ -14,3 +14,7 @@ __pycache__/
 
 # Env
 .env
+
+# Third-party code
+sn_hsh_pipeline/process_HSH_SN/autophot/
+*.tar.gz

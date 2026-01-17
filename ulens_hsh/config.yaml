@@ -5,7 +5,7 @@
 night: "20250823bis"
 
 paths:
-  BASE: "/home/knowogrodski/Documentos/observation_HSH/process_HSH_SN/pipe_HSH/"
+  BASE: "."  # "/home/knowogrodski/Documentos/observation_HSH/ulens_hsh"
   data_dir: "data"           
   objects_dir: "objectos"          
 
