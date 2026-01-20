@@ -21,14 +21,14 @@ def generate_refcat(objname, ra_center, dec_center,
     
     outpath = objects_dir / objname 
     cat_path = outpath/ f"{objname}_alig_cat.csv"
-    if cat_path.exists() and overwrite:
+    if cat_path.exists() and not overwrite:
         print(f"         Omitiendo: Archivo {cat_path} ya existe.")
-        return True
-    elif cat_path.exists() and not overwrite:
+        return cat_path
+    elif cat_path.exists() and overwrite:
         print(f"         Sobrescribiendo archivo {cat_path}")
     else:
         print(f"         Generando archivo {cat_path}...")
-    
+
     # Choose radius for searching reference stars as a fraction of FOV diagonal   
     with fits.open(os.path.join(img_path)) as hdul:
         w_ref = WCS(hdul[0].header)
@@ -161,6 +161,7 @@ def generate_refcat(objname, ra_center, dec_center,
         plt.savefig(plot_path)
         plt.close(fig)
         print(f"      ✓ Plot {plot_path} generado correctamente.")
+
     return cat_path
 
 def plot_catalog_on_image(

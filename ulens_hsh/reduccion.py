@@ -27,6 +27,7 @@ from fits_io import scan_dataset, imstats, read_fits_data, img_stats
 from astropy import log
 log.setLevel('ERROR')
 from matplotlib.gridspec import GridSpec
+from tqdm.auto import tqdm
 
 
 
@@ -314,7 +315,7 @@ def run_reduction(dataset,
         # Darks
         if dark_correction and len(mydarks) > 0:
             print("   → Subtracting bias from darks")
-            for dark in mydarks:
+            for dark in tqdm(mydarks, desc="      → Bias subtraction from darks"):
                 ccd = ccdproc.CCDData.read(dark, unit="adu")
                 ccd = ccdproc.subtract_bias(
                     ccd, master_bias,
@@ -325,7 +326,7 @@ def run_reduction(dataset,
         # Flats
         if flat_correction and len(myflats) > 0:
             print("   → Subtracting bias from flats")
-            for flat in myflats:
+            for flat in tqdm(myflats, desc="      → Bias subtraction from flats"):
                 ccd = ccdproc.CCDData.read(flat, unit="adu")
                 ccd = ccdproc.subtract_bias(
                     ccd, master_bias,
@@ -336,7 +337,7 @@ def run_reduction(dataset,
         # Science images
         if len(myimages) > 0:
             print("   → Subtracting bias from science images")
-            for image in myimages:
+            for image in tqdm(myimages, desc="      → Bias subtraction from science images"):
                 ccd = ccdproc.CCDData.read(image, unit="adu")
                 ccd = ccdproc.subtract_bias(
                     ccd, master_bias,
@@ -374,8 +375,7 @@ def run_reduction(dataset,
             outputs["master_flat"] = master_flat
 
             # Aplicar flat a imágenes científicas bias-subtracted
-            print("   → Applying flat-field correction to science images")
-            for image in myimages:
+            for image in tqdm(myimages, desc="         → Applying flat-field correction to science images"):
                 band = getval(image, 'FILTERS')
                 ccd = ccdproc.CCDData.read(image, unit="adu")
                 ccd = ccdproc.flat_correct(
@@ -384,7 +384,7 @@ def run_reduction(dataset,
                 )
                 ccd.write(data_dir / f"F{image.name}", overwrite=True)
 
-    print("   ✓ Reduction finished")
+    print("✓ Reduction finished")
     return outputs
 
 # -----------------------------------------------------------------------------
@@ -479,7 +479,7 @@ def plot_reduction(dataset, night_dir, objname, output_name=None, show=False,
         hspace=0.30, wspace=0.15
     )
 
-    for i in range(n):
+    for i in tqdm(range(n), desc=f"      → Generating reduction plots"):
         row_img  = 2*i
         row_hist = 2*i + 1
 

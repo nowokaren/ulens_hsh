@@ -26,6 +26,9 @@ from collections import defaultdict
 from astropy.io import fits
 from astropy.wcs import WCS
 from astropy.coordinates import SkyCoord
+from tqdm.auto import tqdm
+import astropy.units as u
+
 
 # =============================================================================
 # Utilidades básicas
@@ -224,8 +227,9 @@ def dataset_metadata(dataset, night_dir, output_file="images_data.csv",
         objects_df = None
         catalog_coords = None
 
-        
-    for file in dataset["all"]:        
+
+
+    for file in tqdm(dataset["all"], desc="   Processing FITS files"):
         file = Path(file)
         if file.name in loaded_filenames:
             continue
@@ -682,7 +686,7 @@ def flag_object_in_fov(
         for _, row in objects.iterrows()
     }
 
-    for _, row in meta.iterrows():
+    for _, row in tqdm(meta.iterrows(), desc="Flagging objects in FOV"):
 
         objname = row["OBJECT"]
         if objname not in obj_coords:

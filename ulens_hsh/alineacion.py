@@ -223,7 +223,7 @@ def imcombine_e(input_list, out_img_ic):
     hdu = fits.PrimaryHDU(data=combined.data, header=ref_header)
     hdu.writeto(out_img_ic, overwrite=True)
 
-    print("         ✓ Combined image saved: {out_img_ic}")
+    print(f"         ✓ Combined image saved: {out_img_ic}")
 
     return out_img_ic
 

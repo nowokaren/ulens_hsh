@@ -8,7 +8,7 @@ from photutils import ModeEstimatorBackground
 from photutils import aperture_photometry,CircularAperture,CircularAnnulus
 from reproject import reproject_interp
 from datetime import datetime as dt
-#from tqdm.auto import tqdm
+from tqdm.auto import tqdm
 from pathlib import Path
 import matplotlib.pyplot as plt
 
@@ -359,7 +359,8 @@ def process_and_combine_images(image_files, objname, filter_band, objects_path,
     valid_images = []
     fwhm_measurements = []
     # -------------------- FILTRADO POR FWHM --------------------
-    for image_path, image_pixel_coords in zip(image_files, pixel_coords):
+    for image_path, image_pixel_coords in tqdm(zip(image_files, pixel_coords), 
+                                               desc=f"         FWHM Measurement", total=len(image_files)):
         # Si no hay estrellas válidas, omitir imagen
         if len(image_pixel_coords) == 0:
             print(f"      ❌ No stars found in {image_path}")
@@ -385,7 +386,8 @@ def process_and_combine_images(image_files, objname, filter_band, objects_path,
     good_seeing_images = []
     good_seeing_fwhms = []
 
-    for image_path, fwhm_value in zip(valid_images, fwhm_measurements):
+    for image_path, fwhm_value in tqdm(zip(valid_images, fwhm_measurements), 
+                                       desc=f"         Seeing Filter", total=len(valid_images)):
         if abs(fwhm_value - mean_fwhm) <= 3 * std_fwhm:
             good_seeing_images.append(image_path)
             good_seeing_fwhms.append(fwhm_value)
@@ -585,6 +587,6 @@ def plot_combined(objname, img_files, output_path, show=True):
     if show:
         plt.show()
     
-    print(f"         ✓ Combined plot saved: {output_path / f'combined_{objname}.png'}")
+    print(f"      ✓ Combined plot saved: {output_path / f'combined_{objname}.png'}")
     plt.close(fig)
 

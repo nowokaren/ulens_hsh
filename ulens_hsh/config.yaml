@@ -18,18 +18,18 @@ instrument:
   rdnoise: 15.7
 
 steps:
-  update_headers: false
+  update_headers: true
   export_metadata: true
-  reduction: false
+  reduction: true
   astrometry: false
-  contains_obj: false
+  contains_obj: true
   combine: true
   cleanup: false
   plots: false
 
 reduction:
-  zero_correction: false
-  flat_correction: false
+  zero_correction: true
+  flat_correction: true
   dark_correction: false   # aún no implementado
 
 astrometry:
@@ -44,7 +44,7 @@ aligment:
     max_mag: 12
     fov_frac: 0.3  # fracción del FOV para búsqueda de
     plot: true
-    overwrite: false
+    overwrite: true
 
 
 combine:
@@ -60,5 +60,5 @@ metadata:
   output_file: "images_data.csv"
 
 qc: # quality checks
-  reduction_images: false
+  reduction_images: true
   combined_images: true

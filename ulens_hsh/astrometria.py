@@ -19,6 +19,7 @@ import requests
 from pathlib import Path
 from astropy.io import fits
 from astropy.wcs import WCS
+from tqdm.auto import tqdm
 
 def apply_astrometry(input_fits, output_path, api_key="wuupmjpswkcbncws"):
     """
@@ -140,7 +141,7 @@ def run_astrometry(dataset, output_dir, api_key, overwrite=True):
     
     results = []
 
-    for img in images:
+    for img in tqdm(images, desc="Applying astrometry"):
         img = Path(img)
 
         out = output_dir / f"{img.stem}_wcs.fits"
