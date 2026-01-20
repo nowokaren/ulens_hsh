@@ -45,6 +45,8 @@ def remove_file(filename):
 # Escaneo y clasificación del dataset
 # =============================================================================
 
+
+
 def scan_dataset(path="."):
     """
     Escanea un directorio y clasifica archivos FITS por tipo y estado de calibración.
@@ -105,9 +107,12 @@ def scan_dataset(path="."):
 
     # Imágenes con astrometría aplicada (ASTROMET = 'yes')
     images_astro = images.files_filtered(imagetyp='object', astromet='yes')
-
+    
+    # Imágenes combinadas (NCOMBINE presente)
+    images_combined = images.files_filtered(imagetyp='object', ncombine='*')
+    images_combined = [ (p / f).resolve() for f in images_combined ]
     # ------------------------------------------------------------------
-    # Eliminar solapamientos (jerarquía: astro > flat > calib > raw)
+    # Eliminar solapamientos (jerarquía: comb  astro > flat > calib > raw)
     # ------------------------------------------------------------------
     images_raw  = [f for f in images_raw if f not in images_cal and f not in images_flat and f not in images_astro]
     images_cal  = [f for f in images_cal if f not in images_flat and f not in images_astro]
@@ -131,6 +136,7 @@ def scan_dataset(path="."):
         "images_cal": images_cal,
         "images_flat": images_flat,
         "images_astro": images_astro,
+        "images_combined": images_combined
     }
 
 # =============================================================================
@@ -180,28 +186,110 @@ def update_headers(fits_files, gain, rdnoise):
 # =============================================================================
 # Exportación de metadatos
 # =============================================================================
-'''
-def dataset_metadata(fits_files, night_dir, output_file="images_data.csv"):
+
+def dataset_metadata(dataset, night_dir, output_file="images_data.csv",
+                     objects_csv=None, max_sep_deg=0.5, load_changes=True):
     """
     Genera una tabla con información del header de los archivos FITS.
+    Si se proporciona un catálogo de objetos (objects_csv), intenta
+    corregir el OBJECT según la posición (RA, DEC) y sobrescribe el FITS
+    si hay cambios.
     """
+
     output_path = Path(night_dir, output_file)
+
+
     keys = [
-        'IMAGETYP', 'CALIBZ', 'CALIBF', 'OBJECT', 'RA', 'DEC', 'EXPTIME', 'GAIN',
+        'IMAGETYP', 'CALIBZ', 'CALIBF', 'ASTROMET', 'OBJECT', 'RA', 'DEC', 'EXPTIME', 'GAIN',
         'RDNOISE', 'FILTERS', 'DATE-OBS', 'TIME-OBS', 'MJD-OBS', 'AIRMASS',
-        'FILENAME'
+        'FILENAME', 'OBJ_MATCH_STATUS', 'CONTAINS_OBJECT'
     ]
 
-    values = []
-    for file in fits_files:
-        header = getheader(file)
-        values.append([header.get(key) for key in keys])
+    if load_changes and output_path.exists():
+        df_existing = pd.read_csv(output_path)
+        loaded_filenames = set(df_existing["FILENAME"].astype(str))
+        values = df_existing.to_dict("records")
+    else:
+        loaded_filenames = set()
+        values = []
 
-    header_str = ",".join(keys)
-    np.savetxt(output_path, values, fmt="%s", delimiter=",", header=header_str)
+    # Cargar catálogo si se proporciona
+    if objects_csv is not None:
+        objects_df = pd.read_csv(objects_csv)
+        catalog_coords = SkyCoord(
+            ra=objects_df["ra_deg"].values * u.deg,
+            dec=objects_df["dec_deg"].values * u.deg
+        )
+    else:
+        objects_df = None
+        catalog_coords = None
+
+        
+    for file in dataset["all"]:        
+        file = Path(file)
+        if file.name in loaded_filenames:
+            continue
+        hdr = getheader(file)
+
+        # --- Corrección del objeto si corresponde ---
+        if objects_df is not None:
+            obj_match_status = "NOT_CHECKED"
+            # Opcional: limitar solo a imágenes crudas
+            if dataset is None or file in dataset.get("images_raw", []):
+
+                ra = hdr.get("RA")
+                dec = hdr.get("DEC")
+
+                try:
+                    # RA puede venir en hh:mm:ss y DEC en grados
+                    img_coord = SkyCoord(ra=ra, dec=dec, unit=(u.hourangle, u.deg))
+                    sep = img_coord.separation(catalog_coords)
+                    min_sep = sep.min()
+                    best_idx = sep.argmin()
+
+                    if min_sep < max_sep_deg * u.deg:
+                        true_name = objects_df.iloc[best_idx]["objeto"]
+
+                        if hdr.get("OBJECT") != true_name:
+                            # Guardar objeto original
+                            hdr["ORIG_OBJ"] = hdr.get("OBJECT")
+                            hdr["OBJECT"] = true_name
+                            obj_match_status = "CORRECTED"
+
+
+                        else:
+                            obj_match_status = "OK"
+                    else:
+                        obj_match_status = "NO_MATCH"
+
+                except Exception as e:
+                    obj_match_status = "ERROR"
+            with fits.open(file, mode="update") as hdul:
+                if obj_match_status == "CORRECTED":
+                    hdul[0].header["ORIG_OBJ"] = hdr["ORIG_OBJ"]
+                    hdul[0].header["OBJECT"] = true_name
+                hdul[0].header["OBJ_MATCH_STATUS"] = obj_match_status
+                hdul.flush()
+
+        # --- Guardar metadata ---
+        row = {}
+        for key in keys:
+            if objects_df is not None and key == "OBJ_MATCH_STATUS":
+                row[key] = obj_match_status
+            elif key == "FILENAME":
+                row[key] = file.name
+            else:
+                row[key] = hdr.get(key)
+        values.append(row)
+
+    #header_str = ",".join(keys)
+    #np.savetxt(output_path, values, fmt="%s", delimiter=",", header=header_str)
+
+    df_final = pd.DataFrame(values, columns=keys)
+    df_final.to_csv(output_path, index=False)
 
     return output_path
-'''
+
 
 from astropy.io.fits import getheader
 from astropy.io import fits
@@ -211,7 +299,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-
+'''
 def dataset_metadata(dataset, night_dir, output_file="images_data.csv",
                      objects_csv=None, max_sep_deg=0.5):
     """
@@ -242,6 +330,7 @@ def dataset_metadata(dataset, night_dir, output_file="images_data.csv",
 
     values = []
 
+    loaded_ds = pd.read_csv(Path(night_dir, "images_data.csv"))
     for file in dataset["all"]:
         file = Path(file)
         hdr = getheader(file)
@@ -302,7 +391,7 @@ def dataset_metadata(dataset, night_dir, output_file="images_data.csv",
     np.savetxt(output_path, values, fmt="%s", delimiter=",", header=header_str)
 
     return output_path
-
+'''
 
 def load_dataset_objects(night_dir, output_file):
     ds = pd.read_csv(Path(night_dir, output_file), usecols=["OBJECT"])

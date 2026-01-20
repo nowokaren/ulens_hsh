@@ -1,12 +1,15 @@
-from fits_io import scan_dataset, update_headers, dataset_metadata
-from fits_io import identify_objects, cleanup_intermediate_files
+from fits_io import scan_dataset, update_headers, dataset_metadata, object_in_fov
+from fits_io import identify_objects, cleanup_intermediate_files 
+from fits_io import flag_object_in_fov, load_dataset_objects
 from reduccion import run_reduction, plot_reduction
 from astrometria import run_astrometry
-
+from stars_catalog import generate_refcat
+import pandas as pd
 from pathlib import Path
 from utils import load_config, Tee
 from datetime import datetime
 import sys
+
 
 
 # -----------------------------------------------------------------------------
@@ -21,6 +24,7 @@ data_dir = Path(BASE, cfg["paths"]["data_dir"])
 object_dir = Path(BASE, cfg["paths"]["objects_dir"])
 night = cfg["night"]
 night_dir = Path(BASE, data_dir, night)
+objects_csv = Path(BASE, "objetos.csv")
 
 gain = cfg["instrument"]["gain"]
 rdnoise = cfg["instrument"]["rdnoise"]
@@ -45,7 +49,7 @@ print("="*80)
 # -------------------------------------------------------------------------
 dataset = scan_dataset(night_dir)
 
-objects = identify_objects(dataset["images_raw"])
+#objects = identify_objects(dataset["images_raw"])
 
 
 # -------------------------------------------------------------------------
@@ -56,13 +60,17 @@ if steps.get("update_headers", False):
     update_headers(dataset["all"], gain=gain, rdnoise=rdnoise)
 
 # -------------------------------------------------------------------------
-# 3) Export metadata (and correct OBJECT name in header)
+# 3) Export metadata
 # -------------------------------------------------------------------------
 if steps.get("export_metadata", False):
     output_file = cfg["metadata"].get("dataset_metadata_file", "images_data.csv")
     print(f"→ Exporting metadata to {output_file}")
     raw_metadata_file = dataset_metadata(dataset, night_dir, output_file=output_file,
                                          objects_csv="objetos.csv")
+    # Load objects list
+    objects = load_dataset_objects(night_dir, output_file)
+
+    
 
 # -------------------------------------------------------------------------
 # 4) Reduction
@@ -85,13 +93,11 @@ else:
 # -------------------------------------------------------------------------
 if cfg["qc"].get("reduction_images", False):
     print("→ Generating reduction plots")
-
-
-    for objname, images in objects.items():
+    for objname in objects:
         print(f"   → Object: {objname}")
 
         plot_reduction(
-            dataset=dataset,
+            dataset=output_file,
             night_dir=night_dir,
             objname=objname,
             output_name=f"reduction_{objname}.png",
@@ -112,6 +118,33 @@ if steps.get("astrometry", False):
         api_key=astro_cfg["api_key"],
         overwrite=astro_cfg.get("overwrite", True),
     )
+dataset = scan_dataset(night_dir)
+metadata_file = dataset_metadata(dataset, night_dir,
+                                output_file=output_file)
+# -------------------------------------------------------------------------
+# 5.5) Images contains its object?
+# -------------------------------------------------------------------------
+if steps.get("contains_obj", False):
+    print("→ Flagging not contained images")
+    df = flag_object_in_fov(metadata_file,
+                       objects_csv,
+                       night_dir,
+                       overwrite=False)
+metadata_file = dataset_metadata(dataset, night_dir,
+                                output_file=output_file)
+                       
+                       
+# -------------------------------------------------------------------------
+# 6) Combination
+# -------------------------------------------------------------------------
+if steps.get("combination", False):
+    print("→ Combining images per object and filter")
+    filters = cfg.get("filters", ["I", "V"])
+    for objname in objects:
+        print(f"   → Object: {objname}")
+        
+        for filt in filters:
+            print(f"      → Filter: {filt}")
 
 '''
 # -------------------------------------------------------------------------

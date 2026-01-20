@@ -181,7 +181,7 @@ def imcombine_e(path, input_list, out_img_ic):
     return out_img_ic
     '''
 
-def imcombine_e(path, input_list, out_img_ic):
+def imcombine_e(input_list, out_img_ic):
     """
     Combina imágenes con mediana + sigma clipping.
     Hereda el WCS COMPLETO de la imagen de referencia.
@@ -223,8 +223,7 @@ def imcombine_e(path, input_list, out_img_ic):
     hdu = fits.PrimaryHDU(data=combined.data, header=ref_header)
     hdu.writeto(out_img_ic, overwrite=True)
 
-    print("Imagen combinada creada correctamente:")
-    print(out_img_ic)
+    print("         ✓ Combined image saved: {out_img_ic}")
 
     return out_img_ic
 

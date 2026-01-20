@@ -5,10 +5,9 @@ import yaml
 import pandas as pd
 import sys
 
-def load_target_coordinates(imdir):
+def load_target_coordinates(objname, objects_csv = "objetos.csv"):
     """
-    Lee automáticamente la RA/Dec del objeto de interés desde:
-    ../../objetos/<OBJETO>/<OBJETO>.coo
+    Lee automáticamente la RA/Dec del objeto de interés desde un archivo CSV.
 
     Acepta dos formatos:
     - decimal:     RA DEC  (en grados)
@@ -17,32 +16,9 @@ def load_target_coordinates(imdir):
     Devuelve RA, Dec en grados (floats).
     """
 
-    # nombre del objeto tomado del path (ej: "OGLE-2025-BLG-0397")
-    objname = Path(imdir).resolve().name
-    
-    '''
-    # ruta al archivo .coo del objeto
-    coo_path = Path(imdir).resolve().parents[1] / "objetos" / objname / f"{objname}.coo"
-
-    if not coo_path.exists():
-        raise FileNotFoundError(f"No se encontró el archivo del objeto: {coo_path}")
-
-    # leemos TODAS las líneas de texto del archivo
-    with open(coo_path, "r") as f:
-        line = f.readline().strip()
-
-    # separo por espacios
-    parts = line.split()
-
-    if len(parts) != 2:
-        raise ValueError(f"Formato inválido en {coo_path}: debe contener 'RA DEC'")
-        
-    ra_str, dec_str = parts
-    '''
-    posiciones = pd.read_csv("../../objetos.csv").query(f"objeto == '{objname}'")
+    posiciones = pd.read_csv(objects_csv).query(f"objeto == '{objname}'")
     ra_str, dec_str = posiciones[["ra_deg", "dec_deg"]].values[0]
     
-
     # CASO 1 — decimal (float)
     try:
         ra = float(ra_str)

@@ -3,11 +3,14 @@
 # =========================
 
 night: "20250823bis"
+filters: ["I", "V"]  # filtros a procesar
 
 paths:
-  BASE: "."  # "/home/knowogrodski/Documentos/observation_HSH/ulens_hsh"
+  BASE: "/home/knowogrodski/Documentos/observation_HSH/ulens_hsh/ulens_hsh"
   data_dir: "data"           
-  objects_dir: "objectos"          
+  objects_dir: "objetos"
+  objects_file: "objetos.csv"
+  images_data_file: "images_data.csv"          
 
 
 instrument:
@@ -19,7 +22,8 @@ steps:
   export_metadata: true
   reduction: false
   astrometry: false
-  contains_obj: true
+  contains_obj: false
+  combine: true
   cleanup: false
   plots: false
 
@@ -33,8 +37,28 @@ astrometry:
   api_key: "wuupmjpswkcbncws"   # para API externa
   overwrite: false
 
+aligment: 
+  catalog:
+    use_catalogs: "all"  # "all" o lista de catálogos
+    min_mag: 9
+    max_mag: 12
+    fov_frac: 0.3  # fracción del FOV para búsqueda de
+    plot: true
+    overwrite: false
+
+
+combine:
+  combine_method: "median"  # "average" o "median"
+  reject_method: "minmax"   # "minmax" o "sigma"
+  nlow: 1                    # para "minmax"
+  nhigh: 1                   # para "minmax"
+  sigma_low: 3.0             # para "sigma"
+  sigma_high: 3.0            # para "sigma"
+  remove_temp_files: true
+
 metadata:
   output_file: "images_data.csv"
 
 qc: # quality checks
-  reduction_images: true
+  reduction_images: false
+  combined_images: true

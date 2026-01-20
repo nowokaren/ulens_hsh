@@ -18,3 +18,5 @@ __pycache__/
 # Third-party code
 sn_hsh_pipeline/process_HSH_SN/autophot/
 *.tar.gz
+ulens_hsh/input_combine.lst
+ulens_hsh/input_combine.lst

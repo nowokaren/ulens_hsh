@@ -1,6 +1,36 @@
-def generate_ref_psf_coo(obj_name, ra_center, dec_center, img_dir, image_files, 
-                         fov_frac=0.3, min_mag=9, max_mag=12, plot=False):
-    with fits.open(os.path.join(img_dir, image_files[0])) as hdul:
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from astropy.io import fits
+from astropy.wcs import WCS
+
+import os
+from astropy.visualization import simple_norm
+import requests
+from astropy.coordinates import SkyCoord
+import astropy.units as u
+from astropy.coordinates import SkyCoord, search_around_sky
+from astroquery.vizier import Vizier
+
+def generate_refcat(objname, ra_center, dec_center, 
+                    img_path, objects_dir, 
+                    fov_frac=0.3, min_mag=9, max_mag=12, 
+                    use_catalogs = "all", plot=False, overwrite=False):
+    
+    
+    outpath = objects_dir / objname 
+    cat_path = outpath/ f"{objname}_alig_cat.csv"
+    if cat_path.exists() and overwrite:
+        print(f"         Omitiendo: Archivo {cat_path} ya existe.")
+        return True
+    elif cat_path.exists() and not overwrite:
+        print(f"         Sobrescribiendo archivo {cat_path}")
+    else:
+        print(f"         Generando archivo {cat_path}...")
+    
+    # Choose radius for searching reference stars as a fraction of FOV diagonal   
+    with fits.open(os.path.join(img_path)) as hdul:
         w_ref = WCS(hdul[0].header)
         ny, nx = hdul[0].data.shape
     
@@ -12,7 +42,7 @@ def generate_ref_psf_coo(obj_name, ra_center, dec_center, img_dir, image_files,
     fov_diag_arcmin = sep2d.max().to(u.arcmin).value
     search_radius_arcmin = fov_diag_arcmin * fov_frac   # radio ≈ diagonal/2
     
-    print(f"FOV diagonal: {fov_diag_arcmin:.1f}' → Radio búsqueda: {search_radius_arcmin:.1f}'")
+    print(f"         FOV diagonal: {fov_diag_arcmin:.1f}' → Search radius: {search_radius_arcmin:.1f}'")
     
     
     coord = SkyCoord(ra_center*u.deg, dec_center*u.deg)
@@ -41,8 +71,10 @@ def generate_ref_psf_coo(obj_name, ra_center, dec_center, img_dir, image_files,
     
     refs = []
     
+    if use_catalogs != "all":
+        catalogs = {k: v for k, v in catalogs.items() if k in use_catalogs}
+        
     for name, c in catalogs.items():
-        print(f"\nBuscando en {name}...")
         mag_limit = f"{min_mag}..{max_mag}"
         try:
             v = Vizier(columns=[c["ra"], c["dec"], c["mag"]],
@@ -50,7 +82,7 @@ def generate_ref_psf_coo(obj_name, ra_center, dec_center, img_dir, image_files,
             r = v.query_region(coord, radius=radius, catalog=c["cat"])
     
             if not r or len(r[0]) == 0:
-                print("  → vacío")
+                print(f"         catalog {name} → 0 refs")
                 continue
     
             t = r[0]
@@ -70,8 +102,7 @@ def generate_ref_psf_coo(obj_name, ra_center, dec_center, img_dir, image_files,
     
             for i in idx:
                 refs.append((ra[i], dec[i], mag[i], name))
-    
-            print(f"  → {len(idx)} refs")
+            print(f"         catalog {name} → {len(idx)} refs")
     
         except Exception as e:
             print(f"  Error: {e}")
@@ -80,57 +111,57 @@ def generate_ref_psf_coo(obj_name, ra_center, dec_center, img_dir, image_files,
     
     if len(refs) == 0:
         raise RuntimeError("No se encontraron estrellas de referencia")
+
+     
+    # Save as CSV
+    df = pd.DataFrame({
+        "ra": refs[:, 0],
+        "dec": refs[:, 1],
+        "mag": refs[:, 2],
+        "catalog": refs[:, 3]
+    })
+    df.to_csv(cat_path, index=False)
+    '''
+    np.savetxt(
+        cat_path,
+        refs[:,:3].astype(float),
+        fmt="%.6f %.6f %.3f"
+    )
+    '''
+
+    print(f"      ✓ Archivo {cat_path} generado correctamente.")
     
     if plot:
         colors = {"Gaia": "yellow", "2MASS": "orange", "APASS": "lime"}
         
-        fig, axes = plt.subplots(2, 3, figsize=(18,12))
-        axes = axes.flatten()
+        with fits.open(img_path) as hdul:
+            data = hdul[0].data
+            w = WCS(hdul[0].header)
         
-        for ax, img in zip(axes, image_files):
+        fig, ax = plt.subplots(1, 1, figsize=(8, 8))
         
-            with fits.open(os.path.join(img_dir, img)) as hdul:
-                data = hdul[0].data
-                w = WCS(hdul[0].header)
-        
-            ax.imshow(data, cmap="gray",
-                      norm=simple_norm(data, "sqrt", percent=99.5),
-                      origin="lower")
-        
-            for cat in np.unique(refs[:,3]):
-                m = refs[:,3] == cat
-                x, y = w.world_to_pixel_values(refs[m,0].astype(float),
-                                               refs[m,1].astype(float))
-                ax.scatter(x, y, s=140, facecolors='none',
-                           edgecolors=colors[cat], lw=2, label=cat)
-        
-            xo, yo = w.world_to_pixel_values(ra_center, dec_center)
-            ax.plot(xo, yo, 'o', ms=30, mew=2, color='cyan', fillstyle='none')
-        
-            ax.set_title(img)
-            ax.legend(fontsize=8)
-        
-        plt.suptitle(f"{obj_name} — estrellas de referencia", fontsize=16)
+        ax.imshow(data, cmap="gray",
+                    norm=simple_norm(data, "sqrt", percent=99.5),
+                    origin="lower")
+    
+        for cat in np.unique(refs[:,3]):
+            m = refs[:,3] == cat
+            x, y = w.world_to_pixel_values(refs[m,0].astype(float),
+                                            refs[m,1].astype(float))
+            ax.scatter(x, y, s=140, facecolors='none',
+                        edgecolors=colors[cat], lw=2, label=cat)
+    
+        xo, yo = w.world_to_pixel_values(ra_center, dec_center)
+        ax.plot(xo, yo, 'o', ms=30, mew=2, color='cyan', fillstyle='none')
+    
+        ax.set_title(f"{objname} - Estrellas de referencia")
+        ax.legend(fontsize=8)
+        plot_path = outpath / f"{objname}_align_cat.png"
         plt.tight_layout()
-        plt.savefig(objname+filt+'_refpsf.png')
-    
-    outdir = Path(mpath.parents[1]) / "objetos" / objname
-    outdir.mkdir(parents=True, exist_ok=True)
-
-    outfile = outdir / f"{objname}_refpsf.coo"
-
-    np.savetxt(
-        outfile,
-        refs[:,:3].astype(float),
-        fmt="%.6f %.6f %.3f"
-    )
-
-    #np.savetxt(str(mpath.parents[1])+'/objetos/'+objname+'/'+objname+'_refpsf.coo',
-    #           refs[:,:3].astype(float),
-    #           fmt="%.6f %.6f %.3f")
-    
-    print("\nArchivo .coo generado correctamente.")
-    return True
+        plt.savefig(plot_path)
+        plt.close(fig)
+        print(f"      ✓ Plot {plot_path} generado correctamente.")
+    return cat_path
 
 def plot_catalog_on_image(
     fits_file,
@@ -145,6 +176,7 @@ def plot_catalog_on_image(
     with fits.open(fits_file) as hdul:
         data = hdul[0].data
         wcs = WCS(hdul[0].header)
+        
 
     fig = plt.figure(figsize=(8, 8))
     ax = fig.add_subplot(111, projection=wcs)
@@ -154,6 +186,7 @@ def plot_catalog_on_image(
         norm=simple_norm(data, "sqrt", percent=99.5),
         origin="lower"
     )
+    catalog = pd.read_csv(catalog)
     x, y = wcs.world_to_pixel_values(
         catalog[ra_col],
         catalog[dec_col]
@@ -196,4 +229,6 @@ def plot_catalog_on_image(
         pad_inches=0.02
     )
     plt.close(fig)
-    print(f"Plot guardado: {out_png}")
+    print(f"         ✓ Plot saved: {out_png}")
+    
+    

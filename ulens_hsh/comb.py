@@ -31,7 +31,7 @@ from astropy.coordinates import SkyCoord
 import astropy.units as u
 from astropy.coordinates import SkyCoord, search_around_sky
 from astroquery.vizier import Vizier
-from aligRAF import center_e,geomap_e,geotran_e,imcombine_e
+from ulens_hsh.alineacion import center_e,geomap_e,geotran_e,imcombine_e
 
 use_ds9=False
 ###############################################################################
@@ -70,9 +70,23 @@ def get_image_fov_arcmin(wcs_header, nx, ny):
     return width_deg * 60, height_deg * 60, diag_deg * 60
 
 
-def generate_ref_psf_coo(obj_name, ra_center, dec_center, img_dir, image_files, 
-                         fov_frac=0.3, min_mag=9, max_mag=12, plot=False):
-    with fits.open(os.path.join(img_dir, image_files[0])) as hdul:
+def generate_refcat(objname, ra_center, dec_center, 
+                    img_path, objects_dir, 
+                    fov_frac=0.3, min_mag=9, max_mag=12, 
+                    use_catalogs = "all", plot=False, overwrite=False):
+    
+    
+    outfile = objects_dir / objname / f"{objname}_alig_cat.csv"
+    if outfile.exists() and overwrite:
+        print(f"      Archivo {outfile} ya existe. Omitiendo generación.")
+        return True
+    elif outfile.exists() and not overwrite:
+        print(f"      Archivo {outfile} ya existe. Sobrescribiendo.")
+    else:
+        print(f"      Generando archivo {outfile}...")
+    
+    # Choose radius for searching reference stars as a fraction of FOV diagonal   
+    with fits.open(os.path.join(img_path)) as hdul:
         w_ref = WCS(hdul[0].header)
         ny, nx = hdul[0].data.shape
     
@@ -84,7 +98,7 @@ def generate_ref_psf_coo(obj_name, ra_center, dec_center, img_dir, image_files,
     fov_diag_arcmin = sep2d.max().to(u.arcmin).value
     search_radius_arcmin = fov_diag_arcmin * fov_frac   # radio ≈ diagonal/2
     
-    print(f"FOV diagonal: {fov_diag_arcmin:.1f}' → Radio búsqueda: {search_radius_arcmin:.1f}'")
+    print(f"      FOV diagonal: {fov_diag_arcmin:.1f}' → Search radius: {search_radius_arcmin:.1f}'")
     
     
     coord = SkyCoord(ra_center*u.deg, dec_center*u.deg)
@@ -113,8 +127,11 @@ def generate_ref_psf_coo(obj_name, ra_center, dec_center, img_dir, image_files,
     
     refs = []
     
+    if use_catalogs != "all":
+        catalogs = {k: v for k, v in catalogs.items() if k in use_catalogs}
+        
     for name, c in catalogs.items():
-        print(f"\nBuscando en {name}...")
+        print(f"         Buscando en {name}...")
         mag_limit = f"{min_mag}..{max_mag}"
         try:
             v = Vizier(columns=[c["ra"], c["dec"], c["mag"]],
@@ -152,6 +169,25 @@ def generate_ref_psf_coo(obj_name, ra_center, dec_center, img_dir, image_files,
     
     if len(refs) == 0:
         raise RuntimeError("No se encontraron estrellas de referencia")
+
+     
+    # Save as CSV
+    df = pd.DataFrame({
+        "ra": refs[:, 0],
+        "dec": refs[:, 1],
+        "mag": refs[:, 2],
+        "catalog": refs[:, 3]
+    })
+    df.to_csv(outfile, index=False)
+    '''
+    np.savetxt(
+        outfile,
+        refs[:,:3].astype(float),
+        fmt="%.6f %.6f %.3f"
+    )
+    '''
+
+    print(f"      Archivo {outfile} generado correctamente.")
     
     if plot:
         colors = {"Gaia": "yellow", "2MASS": "orange", "APASS": "lime"}
@@ -185,23 +221,6 @@ def generate_ref_psf_coo(obj_name, ra_center, dec_center, img_dir, image_files,
         plt.suptitle(f"{obj_name} — estrellas de referencia", fontsize=16)
         plt.tight_layout()
         plt.savefig(objname+filt+'_refpsf.png')
-    
-    outdir = Path(mpath.parents[1]) / "objetos" / objname
-    outdir.mkdir(parents=True, exist_ok=True)
-
-    outfile = outdir / f"{objname}_refpsf.coo"
-
-    np.savetxt(
-        outfile,
-        refs[:,:3].astype(float),
-        fmt="%.6f %.6f %.3f"
-    )
-
-    #np.savetxt(str(mpath.parents[1])+'/objetos/'+objname+'/'+objname+'_refpsf.coo',
-    #           refs[:,:3].astype(float),
-    #           fmt="%.6f %.6f %.3f")
-    
-    print("\nArchivo .coo generado correctamente.")
     return True
 
 #Delete files from possible previous run from the list
@@ -267,6 +286,8 @@ def radec2xy(img,stars):
             # print(f'WARNING: Star {i + 1} at x={xpix:.2f}, y={ypix:.2f} outside {nx}x{ny}')
     print(f"WARNING: {len(outside_coords)} stars outside {nx}x{ny}. {len(pix_coord)-len(outside_coords)} used.")
     return xy
+
+
 
     '''
     xy=[]
@@ -1003,163 +1024,128 @@ else:
 #If images have WCS
 if shift_imgs[0]=='1':
     #Read reference stars
-    stars = pd.read_csv(str(mpath.parents[1])+'/objetos/'+objname+'/'+\
-                    objname+'_refpsf.coo', delim_whitespace=True,comment='#',
-                    header=None)
-    #Get the position xy and measure FWHM for field stars
-    #Get the mean FWHM for each image
-    # -------------------- BLOQUE FWHM START --------------------
-    xy = []
-    im_mean_fwhmx = []
-    im_std_fwhmx  = []
-    im_mean_fwhmy = []
-    im_std_fwhmy  = []
+    def process_and_combine_images(shift_imgs, objname, filt, mpath):
+        """
+        Process aligned images: measure FWHM, filter by seeing quality, perform 
+        aperture photometry, scale images to reference, and combine them.
+        """
+        
+        # Load reference stars catalog
+        stars = pd.read_csv(str(mpath.parents[1])+'/objetos/'+objname+'/'+\
+                        objname+'_refpsf.coo', delim_whitespace=True,comment='#',
+                        header=None)
+        
+        # -------------------- FWHM MEASUREMENT BLOCK --------------------
+        xy = []
+        im_mean_fwhmx = []
+        im_std_fwhmx  = []
+        im_mean_fwhmy = []
+        im_std_fwhmy  = []
 
-    # Convertimos las coordenadas RA/Dec de las estrellas a XY para cada imagen
-    for im in range(1, len(shift_imgs)):
-        star_positions = radec2xy(shift_imgs[im], stars)
-        xy.append(star_positions)
+        # Convert RA/Dec to XY for each image (skip flag at index 0)
+        for im in range(1, len(shift_imgs)):
+            star_positions = radec2xy(shift_imgs[im], stars)
+            xy.append(star_positions)
 
-    imfiles1 = []
+        imfiles1 = []
 
-    # Primera imagen
-    imfiles1.append(shift_imgs[1])
+        # Process all images starting from index 1
+        for im in range(1, len(shift_imgs)):
+            img_idx = im - 1  # Index into xy list
+            
+            if len(xy[img_idx]) == 0:
+                print(f"❌ No valid stars in image {shift_imgs[im]}")
+                fwhm_info = (0.0, 0.0, 0.0, 4.0)
+            else:
+                center_star = (float(xy[img_idx][0][0]), float(xy[img_idx][0][1]))
+                fwhm_info = FWHM_im(shift_imgs[im], center_star)
+        
+            if fwhm_info[3] > 0:
+                imfiles1.append(shift_imgs[im])
+                im_mean_fwhmx.append(fwhm_info[3])
+                im_std_fwhmx.append(0)
+                im_mean_fwhmy.append(fwhm_info[3])
+                im_std_fwhmy.append(0)
+            else:
+                print('*'*75)
+                print(f"Image {shift_imgs[im]} rejected due to invalid FWHM")
+                print()
 
-    # Primera estrella del archivo .coo ya traducida a píxeles
-    if len(xy[0]) == 0:
-        print(f"❌ No hay estrellas válidas en la imagen {shift_imgs[1]}")
-        fwhm_info = (0.0, 0.0, 0.0, 4.0)
-    else:
-        center_star = xy[0][0]
-        center_star = (float(center_star[0]), float(center_star[1]))
-        fwhm_info = FWHM_im(shift_imgs[1], center_star)
+        # -------------------- GLOBAL FWHM STATISTICS --------------------
+        glob_mean_fwhmx = np.mean(im_mean_fwhmx) 
+        glob_std_fwhmx  = np.std(im_mean_fwhmx)  
+        glob_mean_fwhmy = np.mean(im_mean_fwhmy) 
+        glob_std_fwhmy  = np.std(im_mean_fwhmy)
+        
+        # -------------------- QUALITY FILTERING BY SEEING --------------------
+        imfiles2 = []
+        fwhm_4ap = []
+        for i in range(len(imfiles1)):
+            if np.abs(im_mean_fwhmx[i] - glob_mean_fwhmx) <= 3*glob_std_fwhmx \
+            and np.abs(im_mean_fwhmy[i] - glob_mean_fwhmy) <= 3*glob_std_fwhmy:
+                imfiles2.append(imfiles1[i])
+                fwhm_4ap.append(max(im_mean_fwhmx[i], im_mean_fwhmy[i]))
+            else:
+                print('*'*75)
+                print('Image ', imfiles1[i],' removed due to bad seeing')
+                print()
+        
+        # -------------------- PHOTOMETRY MEASUREMENTS --------------------
+        xy2 = [xy[imfiles1.index(f)] for f in imfiles2]
+        
+        im_mean_flux = []
+        im_mean_bkg  = []
+        
+        for i in range(len(imfiles2)):
+            fx, bg = bg_flux_im(imfiles2[i], xy2[i], fwhm_4ap[i])
+            im_mean_flux.append(fx)
+            im_mean_bkg.append(bg)
 
-    # Guardar FWHM de forma segura
-    im_mean_fwhmx.append(fwhm_info[3])
-    im_std_fwhmx.append(0)
-    im_mean_fwhmy.append(fwhm_info[3])
-    im_std_fwhmy.append(0)
+        glob_mean_flux = np.mean(im_mean_flux)
 
-    # Loop sobre el resto de las imágenes
-    for im in range(2, len(shift_imgs)):
-        # Verificar que haya al menos una estrella
-        if len(xy[im-1]) == 0:
-            print(f"❌ No hay estrellas válidas en la imagen {shift_imgs[im]}")
-            fwhm_info = (0.0, 0.0, 0.0, 4.0)
-        else:
-            center_star = xy[im-1][0]
-            center_star = (float(center_star[0]), float(center_star[1]))
-            fwhm_info = FWHM_im(shift_imgs[im], center_star)
-    
-        # Comprobar si la estrella está dentro de los límites y FWHM > 0
-        if fwhm_info[3] > 0:
-            imfiles1.append(shift_imgs[im])
-            im_mean_fwhmx.append(fwhm_info[3])
-            im_std_fwhmx.append(0)
-            im_mean_fwhmy.append(fwhm_info[3])
-            im_std_fwhmy.append(0)
-        else:
-            print('*'*75)
-            print(f"Imagen {shift_imgs[im]} ignorada por FWHM inválida")
-            print()
+        # -------------------- REFERENCE IMAGE SELECTION --------------------
+        ref_idx = int((len(imfiles2)/2)-1)
+        ref_img = imfiles2[ref_idx]
+        ref_flux, ref_bkg_value = bg_flux_im(ref_img, xy2[ref_idx], fwhm_4ap[ref_idx])
+        
+        # -------------------- IMAGE ALIGNMENT --------------------
+        trans_files = algn_with_wcs(imfiles2, filt)
+        
+        # -------------------- IMAGE SCALING --------------------
+        scal_files = []
+        for i in range(len(trans_files)):
+            hdu  = fits.open(trans_files[i])[0]
+            data = fits.getdata(trans_files[i])
 
-    #Get the mean FWHM of the set of images (global mean FWHM)
-    glob_mean_fwhmx = np.mean(im_mean_fwhmx) 
-    glob_std_fwhmx  = np.std(im_mean_fwhmx)  
-    glob_mean_fwhmy = np.mean(im_mean_fwhmy) 
-    glob_std_fwhmy  = np.std(im_mean_fwhmy)
-    #Remove images with im_FWHM > global_FWHM + 3sigma,
-    #save good images in imfiles2
-    #Save FWHM to calculate aperture to measure mean flux of each image
-    imfiles2=[]
-    fwhm_4ap=[]
-    for i in range(len(imfiles1)):
-        if np.abs(im_mean_fwhmx[i] - glob_mean_fwhmx) <= 3*glob_std_fwhmx \
-        and np.abs(im_mean_fwhmy[i] - glob_mean_fwhmy) <= 3*glob_std_fwhmy:
-            imfiles2.append(imfiles1[i])
-            fwhm_4ap.append(max(im_mean_fwhmx[i],im_mean_fwhmy[i]))
+            if np.ma.isMaskedArray(data):
+                data = data.filled(0)
+            data = np.array(data, dtype=np.float64)
 
-            imfiles2.append(imfiles1[i])
-            fwhm_4ap.append(max(im_mean_fwhmx[i-1],im_mean_fwhmy[i-1]))
-        else:
-            print('*'*75)
-            print('Image ', imfiles1[i],' removed due to bad seeing')
-            print()
-    #Measure background and calculate aperture photometry for
-    #selected stars
-    #im_meax* values is the mean flux and bkg value per image
-    #glob* values are the mead flux and bkg value of all the images
-    '''
-    im_mean_flux = []
-    im_mean_bkg  = []
-    for i in range(len(imfiles2)):
-        fx,bg = bg_flux_im(imfiles2[i],xy[i],fwhm_4ap[i])
-        im_mean_flux.append(fx)
-        im_mean_bkg.append(bg)
-    glob_mean_flux = np.mean(im_mean_flux)
-    '''
-    # Crear lista de coordenadas correspondientes a las imágenes filtradas
-    xy2 = [xy[shift_imgs.index(f)-1] for f in imfiles2]
-    
-    # Calcular flujo y background para cada imagen filtrada
-    im_mean_flux = []
-    im_mean_bkg  = []
-    
-    for i in range(len(imfiles2)):
-        fx, bg = bg_flux_im(imfiles2[i], xy2[i], fwhm_4ap[i])
-        im_mean_flux.append(fx)
-        im_mean_bkg.append(bg)
+            data_norm = (data - im_mean_bkg[i]) * (ref_flux / im_mean_flux[i])
+            data_norm = np.nan_to_num(data_norm)
 
-    glob_mean_flux = np.mean(im_mean_flux)
+            simgname = trans_files[i][:-5]+'_scaled.fits'
+            scal_files.append(simgname)
 
-    #Calculate reference flux and background to subtract to every image
-    ref_img = imfiles2[int((len(imfiles2)/2)-1)]
-    ref_flux,ref_bkg_value = bg_flux_im(ref_img,xy[int((len(imfiles2)/2)-1)],
-                                        fwhm_4ap[int((len(imfiles2)/2)-1)])
-    #Align images
-    trans_files = algn_with_wcs(imfiles2,filt)
-    #Scale images by bkg and flux and save them
-    scal_files = []
-    for i in range(len(trans_files)):
-        hdu  = fits.open(trans_files[i])[0]
-        data = fits.getdata(trans_files[i])
-        #Scaled image: (img-bkg)*(ref_flux/img_flux)
-        '''
-        data_norm = (data-im_mean_bkg[i])*(ref_flux/im_mean_flux[i])
-        simgname  = trans_files[i][:-5]+'_scaled.fits'
-        scal_files.append(simgname)
-        fits.writeto(simgname,data_norm,hdu.header,overwrite=True)
-        '''
+            if np.ma.isMaskedArray(data_norm):
+                data_norm = data_norm.filled(np.nan)
+            fits.writeto(simgname, data_norm, hdu.header, overwrite=True)
 
-        if np.ma.isMaskedArray(data):
-            data = data.filled(0)  # reemplaza los píxeles enmascarados por 0
-        data = np.array(data, dtype=np.float64)
-
-        # Escalado por fondo y flujo de referencia
-        data_norm = (data - im_mean_bkg[i]) * (ref_flux / im_mean_flux[i])
-        data_norm = np.nan_to_num(data_norm)
-
-        # Nombre de salida
-        simgname  = trans_files[i][:-5]+'_scaled.fits'
-        scal_files.append(simgname)
-
-        # Guardar FITS
-        if np.ma.isMaskedArray(data_norm):
-            data_norm = data_norm.filled(np.nan)  # o 0
-        fits.writeto(simgname, data_norm, hdu.header, overwrite=True)
-
-    #Save scaled aligned images to list to then combine them
-    with open('input_combine.lst','w+') as outfile:
-        outfile.write('\n'.join(scal_files))
-        outfile.write('\n')
-    #Combine images 
-    comb_img = comb(imfiles2,'input_combine.lst')
-    #Add background to combined image
-    hdu_comb    = fits.open(comb_img)[0]
-    data_comb   = fits.getdata(comb_img)
-    data_comb_f = data_comb+np.mean(im_mean_bkg)
-    #Save combined image with added mean bkg
-    fits.writeto(comb_img,data_comb_f,hdu_comb.header,overwrite=True)
+        # -------------------- IMAGE COMBINATION --------------------
+        with open('input_combine.lst','w+') as outfile:
+            outfile.write('\n'.join(scal_files))
+            outfile.write('\n')
+        
+        comb_img = comb(imfiles2, 'input_combine.lst')
+        
+        # -------------------- ADD MEAN BACKGROUND --------------------
+        hdu_comb  = fits.open(comb_img)[0]
+        data_comb = fits.getdata(comb_img)
+        data_comb_f = data_comb + np.mean(im_mean_bkg)
+        
+        fits.writeto(comb_img, data_comb_f, hdu_comb.header, overwrite=True)
+        
+        return comb_img
     #Show combined image in ds9
     showinds9(comb_img, use_ds9=use_ds9)
     
