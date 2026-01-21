@@ -50,7 +50,6 @@ print("="*80)
 # -------------------------------------------------------------------------
 dataset = scan_dataset(night_dir)
 
-
 # -------------------------------------------------------------------------
 # 2) Update headers
 # -------------------------------------------------------------------------
@@ -174,11 +173,9 @@ if steps.get("combine", False):
                 continue
             print(f"         ✓ Found {len(images_to_combine)} images for filter {filt}.")
             combined_im = process_and_combine_images(images_to_combine, objname,  filt, object_path, night_dir, objects_csv)
-
+            # Plot aligment reference catalog on combined images (unnecessary step)
             plot_catalog_on_image(fits_file=combined_im,
                                   catalog=alig_cat_path,
-                                  ra_col="ra",
-                                  dec_col="dec",
                                   obj_ra=ra,
                                   obj_dec=dec,
                                   out_png=Path(night_dir, f"{objname}{filt}_comb_alig_cat.png"),
@@ -199,7 +196,42 @@ if cfg["qc"].get("combined_images", False):
             print(f"      ! No combined images found for object {objname}. Skipping.")
             continue  
         plot_combined(objname, image_files,  night_dir, show=False)
-          
+        
+        
+if steps.get("photometry", False):
+    print("→ Photometry on science images")
+    for objname in objects:
+        print(f"   → Object: {objname}")
+        print(f"      → Generating reference catalog")
+
+        ra, dec = load_target_coordinates(objname, objects_csv)
+        phot_cat_cfg = cfg["photometry"]["catalog"]
+
+        ds = pd.read_csv(Path(night_dir, output_file))
+        img_files = ds[(ds["OBJECT"]==objname)&(ds["ASTROMET"]=="yes")]["FILENAME"].values
+        img_path = night_dir / img_files[0]
+        phot_cat_path = generate_refcat(
+            objname=objname, ra_center=ra, dec_center=dec,
+            img_path=img_path, objects_dir=object_path,
+            fov_frac=phot_cat_cfg.get("fov_frac", 0.3),
+            min_mag=phot_cat_cfg.get("min_mag", 9),
+            max_mag=phot_cat_cfg.get("max_mag", 12),
+            max_mag_err=phot_cat_cfg.get("max_mag_err", 0.25),
+            use_catalogs="all",
+            plot=phot_cat_cfg.get("plot", False),
+            type="phot",
+            overwrite=phot_cat_cfg.get("overwrite", False)
+        )
+        print(f"      → Plotting catalog on combined images")
+        combined_im = [f for f in dataset["images_combined"] if objname in f.name][0]
+        plot_catalog_on_image(fits_file=combined_im,
+                        catalog=phot_cat_path,
+                        obj_ra=ra,
+                        obj_dec=dec,
+                        out_png=Path(object_path, objname, f"{objname}_phot_cat.png"),
+                        title=f"{objname} – Aligment catalog")
+
+
         
 
 

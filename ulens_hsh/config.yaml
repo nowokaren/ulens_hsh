@@ -4,6 +4,8 @@
 
 night: "20250823bis"
 filters: ["I", "V"]  # filtros a procesar
+metadata:
+  output_file: "images_data.csv"
 
 paths:
   BASE: "/home/knowogrodski/Documentos/observation_HSH/ulens_hsh/ulens_hsh"
@@ -20,10 +22,11 @@ instrument:
 steps:
   update_headers: true
   export_metadata: true
-  reduction: true
+  reduction: false
   astrometry: false
-  contains_obj: true
-  combine: true
+  contains_obj: false
+  combine: false
+  photometry: true
   cleanup: false
   plots: false
 
@@ -56,9 +59,27 @@ combine:
   sigma_high: 3.0            # para "sigma"
   remove_temp_files: true
 
-metadata:
-  output_file: "images_data.csv"
+photometry:
+  catalog:
+    use_catalogs: ["Gaia"]  # "all" o lista ["Gaia_phot", "APASS"]
+    query_method: "gaia"  # "vizier" o "gaia" or "raw"
+    gaia_to_vi: "ESA"   # "ESA" or "Tonry" (SN)
+    min_mag: 9
+    max_mag: 15
+    max_mag_err: 0.25
+    fov_frac: 0.3  # fracción del FOV para búsqueda de fuentes
+    overwrite: true
+    min_bp_snr: 50
+    min_rp_snr: 50
+    min_g_snr: 100
+    row_limit: -1
+  method: "aperture"  # "aperture" o "psf"
+  aperture_radius: 5.0  # en píxeles
+  annulus_inner_radius: 8.0  # en píxeles
+  annulus_width: 5.0  # en píxeles
+
+
 
 qc: # quality checks
-  reduction_images: true
-  combined_images: true
+  reduction_images: false
+  combined_images: false
