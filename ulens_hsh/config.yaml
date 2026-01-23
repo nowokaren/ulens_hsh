@@ -4,8 +4,6 @@
 
 night: "20250823bis"
 filters: ["I", "V"]  # filtros a procesar
-metadata:
-  output_file: "images_data.csv"
 
 paths:
   BASE: "/home/knowogrodski/Documentos/observation_HSH/ulens_hsh/ulens_hsh"
@@ -61,25 +59,180 @@ combine:
 
 photometry:
   catalog:
-    use_catalogs: ["Gaia"]  # "all" o lista ["Gaia_phot", "APASS"]
-    query_method: "gaia"  # "vizier" o "gaia" or "raw"
-    gaia_to_vi: "ESA"   # "ESA" or "Tonry" (SN)
+    use_catalogs: "Gaia3"  # "Gaia3" or "Gaia_SN"
     min_mag: 9
     max_mag: 15
     max_mag_err: 0.25
-    fov_frac: 0.3  # fracción del FOV para búsqueda de fuentes
+    fov_frac: 0.4  # fracción del FOV para búsqueda de fuentes
     overwrite: true
     min_bp_snr: 50
     min_rp_snr: 50
     min_g_snr: 100
     row_limit: -1
+  on_exp: false        # do photometry on individual exposures?
+  on_comb: true       # do photometry on combined images?
   method: "aperture"  # "aperture" o "psf"
-  aperture_radius: 5.0  # en píxeles
-  annulus_inner_radius: 8.0  # en píxeles
-  annulus_width: 5.0  # en píxeles
-
-
-
+  autophot:
+    method: sp
+    ignore_no_telescop: false
+    outdir_name: "lightcurve"
+    outcsv_name: "REDUCED"
+    ignore_no_filter: true
+    restart: false
+    select_filter: false
+    do_filter: [None]
+    plot_source_selection: true
+    preprocessing:
+      trim_edges: false
+      trim_edges_pixels: 50
+      mask_sources: false
+      mask_sources_RADEC_R: None
+    photometry:
+      do_ap_phot: false
+      force_psf: false
+      use_local_stars: false
+      use_local_stars_for_FWHM: false
+      use_local_stars_for_PSF: false
+      use_source_arcmin: 4
+      local_radius: 1500
+      find_optimum_radius: false
+      check_nyquist: true
+      nyquist_limit: 3
+      ap_size: 1.7
+      inf_ap_size: 2.5
+      ap_corr_sigma: 3
+      ap_corr_plot: false
+      r_in_size: 2
+      r_out_size: 3
+    templates:
+      use_user_template: true
+    wcs:
+      allow_wcs_recheck: false
+      remove_wcs: false
+      force_wcs_redo: false
+      solve_field_exe_loc: None
+      offset_param: 5.0
+      search_radius: 0.25
+      downsample: 2
+      cpulimit: 180
+      update_wcs_scale: false
+      use_xylist: false
+      TNS_BOT_ID: None
+      TNS_BOT_NAME: None
+      TNS_BOT_API: None
+    catalog:
+      use_catalog: "custom"
+      catalog_custom_fpath: None
+      catalog_radius: 0.25
+      plot_catalog_nondetections: false
+      include_IR_sequence_data: false
+      matching_source_FWHM_limit: 100
+      catalog_matching_limit: 20
+      max_catalog_sources: 300
+    cosmic_rays:
+      remove_cmrays: true
+      use_lacosmic: false
+    fitting:
+      fitting_method: least_squares
+      use_moffat: false
+      default_moff_beta: 4.765
+      bkg_level: 5
+      remove_bkg_surface: true
+      remove_bkg_local: false
+      remove_bkg_poly: false
+      remove_bkg_poly_degree: 1
+      fitting_radius: 1.5
+    extinction:
+      apply_airmass_extinction: false
+    source_detection:
+      threshold_value: 25
+      lim_threshold_value: 5
+      fudge_factor: 5
+      fine_fudge_factor: 0.1
+      fwhm_guess: 7
+      isolate_sources_fwhm_sep: 5
+      init_iso_scale: 15
+      sigmaclip_FWHM_sigma: 3
+      sigmaclip_median_sigma: 3
+      image_analysis: false
+      remove_sat: true
+      pix_bound: 25
+      save_FWHM_plot: false
+      min_source_lim: 2
+      max_source_lim: 300
+      source_max_iter: 30
+      int_scale: 25
+      scale_multipler: 4
+      max_fit_fwhm: 30
+      use_catalog: None
+    limiting_magnitude:
+      force_lmag: false
+      skip_lmag: false
+      injected_sources_use_beta: true
+      beta_limit: 0.75
+      lmag_check_SNR: 5
+      detection_limit: 3
+      inject_lmag_use_ap_phot: true
+      inject_sources: true
+      probable_limit: true
+      inject_source_mag: 19.5
+      inject_source_sources_no: 6
+      inject_source_location: 3
+      inject_source_cutoff_limit: 0.8
+      inject_source_recover_nsteps: 100
+      inject_source_recover_dmag: 0.5
+      inject_source_recover_fine_dmag: 0.05
+      inject_source_add_noise: true
+      inject_source_recover_dmag_redo: 3
+      injected_sources_additional_sources: true
+      injected_sources_additional_sources_position: 1
+      injected_sources_additional_sources_number: 3
+      inject_source_random: true
+      inject_source_on_target: false
+      plot_injected_sources_randomly: true
+      injected_sources_save_output: false
+      check_catalog_nondetections: false
+    target_photometry:
+      adjust_SN_loc: true
+      save_target_plot: true
+    psf:
+      psf_source_no: 10
+      min_psf_source_no: 3
+      plot_PSF_residuals: false
+      plot_PSF_model_residuals: false
+      construction_SNR: 25
+      regrid_size: 10
+      save_PSF_models_fits: true
+      save_PSF_stars: false
+      use_PSF_starlist: false
+      PSF_starlist: None
+    template_subtraction:
+      do_subtraction: false
+      do_ap_on_sub: false
+      use_astroalign: false
+      get_PS1_template: false
+      save_subtraction_quicklook: true
+      prepare_templates: false
+      hotpants_exe_loc: None
+      hotpants_timeout: 100
+      use_zogy: false
+      zogy_use_pixel: false
+    error:
+      target_error_compute_multilocation: true
+      target_error_compute_multilocation_position: 0.5
+      target_error_compute_multilocation_number: 10
+    zeropoint:
+      zp_sigma: 3
+      zp_plot: false
+      plot_ZP_vs_SNR: false
+      plot_ZP_image_analysis: false
+      zp_use_mean: true
+      zp_use_fitted: false
+      zp_use_median: false
+      zp_use_WA: false
+      zp_use_max_bin: false
+      matching_source_SNR_limit: 25
+       
 qc: # quality checks
   reduction_images: false
   combined_images: false

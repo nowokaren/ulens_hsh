@@ -1028,38 +1028,76 @@ if shift_imgs[0]=='1':
         """
         Process aligned images: measure FWHM, filter by seeing quality, perform 
         aperture photometry, scale images to reference, and combine them.
+        
+        Parameters
+        ----------
+        shift_imgs : list
+            List of aligned image filenames. First element is a flag ('0' or '1')
+            indicating WCS presence.
+        objname : str
+            Object name for file paths.
+        filt : str
+            Filter name.
+        mpath : Path
+            Current working directory path.
+        
+        Returns
+        -------
+        comb_img : str
+            Filename of the combined image.
         """
         
-        # Load reference stars catalog
+        # Load reference stars catalog (RA/Dec format)
         stars = pd.read_csv(str(mpath.parents[1])+'/objetos/'+objname+'/'+\
                         objname+'_refpsf.coo', delim_whitespace=True,comment='#',
                         header=None)
         
         # -------------------- FWHM MEASUREMENT BLOCK --------------------
+        # Measure FWHM for each image using the first reference star
+        
         xy = []
         im_mean_fwhmx = []
         im_std_fwhmx  = []
         im_mean_fwhmy = []
         im_std_fwhmy  = []
 
-        # Convert RA/Dec to XY for each image (skip flag at index 0)
+        # Convert RA/Dec star coordinates to XY pixel coordinates for each image
         for im in range(1, len(shift_imgs)):
             star_positions = radec2xy(shift_imgs[im], stars)
             xy.append(star_positions)
 
         imfiles1 = []
 
-        # Process all images starting from index 1
-        for im in range(1, len(shift_imgs)):
-            img_idx = im - 1  # Index into xy list
-            
-            if len(xy[img_idx]) == 0:
+        # Process first image
+        imfiles1.append(shift_imgs[1])
+
+        # Measure FWHM using the first reference star in first image
+        if len(xy[0]) == 0:
+            print(f"❌ No valid stars in image {shift_imgs[1]}")
+            fwhm_info = (0.0, 0.0, 0.0, 4.0)
+        else:
+            center_star = xy[0][0]
+            center_star = (float(center_star[0]), float(center_star[1]))
+            fwhm_info = FWHM_im(shift_imgs[1], center_star)
+
+        # Store FWHM values safely
+        im_mean_fwhmx.append(fwhm_info[3])
+        im_std_fwhmx.append(0)
+        im_mean_fwhmy.append(fwhm_info[3])
+        im_std_fwhmy.append(0)
+
+        # Process remaining images
+        for im in range(2, len(shift_imgs)):
+            # Check if valid stars exist in current image
+            if len(xy[im-1]) == 0:
                 print(f"❌ No valid stars in image {shift_imgs[im]}")
                 fwhm_info = (0.0, 0.0, 0.0, 4.0)
             else:
-                center_star = (float(xy[img_idx][0][0]), float(xy[img_idx][0][1]))
+                center_star = xy[im-1][0]
+                center_star = (float(center_star[0]), float(center_star[1]))
                 fwhm_info = FWHM_im(shift_imgs[im], center_star)
         
+            # Accept image if FWHM is valid (> 0)
             if fwhm_info[3] > 0:
                 imfiles1.append(shift_imgs[im])
                 im_mean_fwhmx.append(fwhm_info[3])
@@ -1072,27 +1110,36 @@ if shift_imgs[0]=='1':
                 print()
 
         # -------------------- GLOBAL FWHM STATISTICS --------------------
+        # Calculate mean and std of FWHM across all valid images
         glob_mean_fwhmx = np.mean(im_mean_fwhmx) 
         glob_std_fwhmx  = np.std(im_mean_fwhmx)  
         glob_mean_fwhmy = np.mean(im_mean_fwhmy) 
         glob_std_fwhmy  = np.std(im_mean_fwhmy)
         
         # -------------------- QUALITY FILTERING BY SEEING --------------------
+        # Remove images with seeing worse than global_FWHM + 3σ
         imfiles2 = []
         fwhm_4ap = []
         for i in range(len(imfiles1)):
             if np.abs(im_mean_fwhmx[i] - glob_mean_fwhmx) <= 3*glob_std_fwhmx \
             and np.abs(im_mean_fwhmy[i] - glob_mean_fwhmy) <= 3*glob_std_fwhmy:
                 imfiles2.append(imfiles1[i])
-                fwhm_4ap.append(max(im_mean_fwhmx[i], im_mean_fwhmy[i]))
+                fwhm_4ap.append(max(im_mean_fwhmx[i],im_mean_fwhmy[i]))
+
+                imfiles2.append(imfiles1[i])
+                fwhm_4ap.append(max(im_mean_fwhmx[i-1],im_mean_fwhmy[i-1]))
             else:
                 print('*'*75)
                 print('Image ', imfiles1[i],' removed due to bad seeing')
                 print()
         
         # -------------------- PHOTOMETRY MEASUREMENTS --------------------
-        xy2 = [xy[imfiles1.index(f)] for f in imfiles2]
+        # Measure background and flux for each filtered image
         
+        # Map coordinates to filtered images
+        xy2 = [xy[shift_imgs.index(f)-1] for f in imfiles2]
+        
+        # Calculate flux and background for each filtered image
         im_mean_flux = []
         im_mean_bkg  = []
         
@@ -1104,45 +1151,57 @@ if shift_imgs[0]=='1':
         glob_mean_flux = np.mean(im_mean_flux)
 
         # -------------------- REFERENCE IMAGE SELECTION --------------------
-        ref_idx = int((len(imfiles2)/2)-1)
-        ref_img = imfiles2[ref_idx]
-        ref_flux, ref_bkg_value = bg_flux_im(ref_img, xy2[ref_idx], fwhm_4ap[ref_idx])
+        # Use middle image as reference for scaling all others
+        ref_img = imfiles2[int((len(imfiles2)/2)-1)]
+        ref_flux, ref_bkg_value = bg_flux_im(ref_img, xy[int((len(imfiles2)/2)-1)],
+                                             fwhm_4ap[int((len(imfiles2)/2)-1)])
         
         # -------------------- IMAGE ALIGNMENT --------------------
+        # Align all images using WCS solutions
         trans_files = algn_with_wcs(imfiles2, filt)
         
         # -------------------- IMAGE SCALING --------------------
+        # Scale each image by background and flux relative to reference:
+        # scaled_image = (image - background) * (ref_flux / image_flux)
         scal_files = []
         for i in range(len(trans_files)):
             hdu  = fits.open(trans_files[i])[0]
             data = fits.getdata(trans_files[i])
 
+            # Handle masked arrays
             if np.ma.isMaskedArray(data):
                 data = data.filled(0)
             data = np.array(data, dtype=np.float64)
 
+            # Scale by reference flux and background
             data_norm = (data - im_mean_bkg[i]) * (ref_flux / im_mean_flux[i])
             data_norm = np.nan_to_num(data_norm)
 
-            simgname = trans_files[i][:-5]+'_scaled.fits'
+            # Output filename
+            simgname  = trans_files[i][:-5]+'_scaled.fits'
             scal_files.append(simgname)
 
+            # Save scaled FITS file
             if np.ma.isMaskedArray(data_norm):
                 data_norm = data_norm.filled(np.nan)
             fits.writeto(simgname, data_norm, hdu.header, overwrite=True)
 
         # -------------------- IMAGE COMBINATION --------------------
+        # Create list of scaled images for combination
         with open('input_combine.lst','w+') as outfile:
             outfile.write('\n'.join(scal_files))
             outfile.write('\n')
         
+        # Combine all scaled images using IRAF imcombine
         comb_img = comb(imfiles2, 'input_combine.lst')
         
         # -------------------- ADD MEAN BACKGROUND --------------------
-        hdu_comb  = fits.open(comb_img)[0]
-        data_comb = fits.getdata(comb_img)
+        # Add back the mean background level to combined image
+        hdu_comb    = fits.open(comb_img)[0]
+        data_comb   = fits.getdata(comb_img)
         data_comb_f = data_comb + np.mean(im_mean_bkg)
         
+        # Save combined image with restored background
         fits.writeto(comb_img, data_comb_f, hdu_comb.header, overwrite=True)
         
         return comb_img

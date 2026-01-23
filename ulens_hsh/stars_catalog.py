@@ -49,13 +49,13 @@ CATALOGS_PHOT = {
         # "mag": ["g", "r", "i"],
         # "mag_err": ["dg", "dr", "di"],
         # },
-        # "Gaia_SN_new": { 
-        # "cat": "J/ApJ/867/105/refcat2",
-        # "ra": "RA_ICRS",
-        # "dec": "DE_ICRS",
-        # "mag": ["g", "r", "i"], # de PAN - STARRS (crossmatch)
-        # "mag_err": ["dg", "dr", "di"],
-        # },
+         "Gaia_SN": { 
+         "cat": "J/ApJ/867/105/refcat2",
+         "ra": "RA_ICRS",
+         "dec": "DE_ICRS",
+         "mag": ["gmag", "rmag", "imag"], # de PAN - STARRS (crossmatch)
+         "mag_err": ["e_gmag", "e_rmag", "e_imag"],
+         },
         # #	ATLAS all-sky stellar reference catalog, 
         # # ATLAS-REFCAT2 (original column names in green) (992637834 rows)
         "Gaia3": {
@@ -144,10 +144,13 @@ def generate_refcat(objname, ra_center, dec_center,
         sep = coord.separation(coord_refs).arcmin
         df = df[sep > 0.5]
         if type == "phot":
-            df = gaia_to_vi(df)
+            if use_catalogs == "Gaia3":
+                df = gaia_to_vi(df)
+            elif use_catalogs == "Gaia_SN":
+                df = gaia_to_bvri(df)
         elif type == "alig":
             df = df.rename(columns = {c["mag"]: "mag"})
-        df = df.rename(columns = {c["ra"]:"ra", c["dec"]:"dec"})
+        df = df.rename(columns = {c["ra"]:"RA", c["dec"]:"DEC"})
         df["catalog"] = name
         refs.append(df)
         print(f"            • Catalog {name} → {len(df)} refs")
@@ -204,8 +207,8 @@ def plot_catalog_on_image(
     obj_ra,
     obj_dec,
     out_png,
-    ra_col="ra",
-    dec_col="dec",
+    ra_col="RA",
+    dec_col="DEC",
     title=""
 ):
     with fits.open(fits_file) as hdul:
@@ -341,9 +344,9 @@ def gaia_to_vi(df):
 
 
 def gaia_to_bvri(df,
-                 g_col='g', r_col='r', i_col='i',
-                 dg_col='dg', dr_col='dr', di_col='di',
-                 ra_col='RA', dec_col='Dec'):
+                 g_col='gmag', r_col='rmag', i_col='imag',
+                 dg_col='e_gmag', dr_col='e_rmag', di_col='e_imag',
+                 ra_col='ra', dec_col='dec'):
     """
     Transform Gaia-like photometry (g, r, i) to Johnson-Cousins BVRI
     using Tonry et al. (2012).
