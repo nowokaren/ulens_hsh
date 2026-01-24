@@ -7,9 +7,16 @@ from stars_catalog import generate_refcat, plot_catalog_on_image
 from combine import process_and_combine_images, plot_combined, remove_aligment_tempfiles
 import pandas as pd
 from pathlib import Path
-from utils import load_config, Tee, load_target_coordinates
+import os
+from utils import load_config, Tee, load_target_coordinates, append_last_row
 from datetime import datetime
 import sys
+from autophot.autophot_main import run_automatic_autophot
+import tempfile
+import shutil
+from autophot.prep_input import load
+
+
 
 
 
@@ -26,6 +33,8 @@ object_path = Path(data_path, cfg["paths"]["objects_dir"])
 night = cfg["night"]
 night_dir = Path(data_path, night)
 objects_csv = Path(object_path, "objetos.csv")
+images_file_name = cfg["paths"]["images_data_file"]
+images_file = Path(night_dir, images_file_name)
 
 gain = cfg["instrument"]["gain"]
 rdnoise = cfg["instrument"]["rdnoise"]
@@ -61,12 +70,11 @@ if steps.get("update_headers", False):
 # 3) Export metadata
 # -------------------------------------------------------------------------
 if steps.get("export_metadata", False):
-    output_file = cfg["metadata"].get("dataset_metadata_file", "images_data.csv")
-    print(f"→ Exporting metadata to {output_file}")
-    metadata_file = dataset_metadata(dataset, night_dir, output_file=output_file,
+    print(f"→ Exporting metadata to {images_file}")
+    metadata_file = dataset_metadata(dataset, night_dir, output_file=images_file,
                                          objects_csv=objects_csv)
     # Load objects list
-    objects = load_dataset_objects(night_dir, output_file)
+    objects = load_dataset_objects(night_dir, images_file)
     
     # Create a folder in objects dir for each object
     for objname in objects:
@@ -99,7 +107,7 @@ if cfg["qc"].get("reduction_images", False):
         print(f"   → Object: {objname}")
 
         plot_reduction(
-            dataset=output_file,
+            dataset=images_file,
             night_dir=night_dir,
             objname=objname,
             output_name=f"reduction_{objname}.png",
@@ -123,7 +131,7 @@ if steps.get("astrometry", False):
     )
     dataset = scan_dataset(night_dir)
     metadata_file = dataset_metadata(dataset, night_dir,
-                                    output_file=output_file)
+                                    output_file=images_file)
 # -------------------------------------------------------------------------
 # 5.5) Images contains its object?
 # -------------------------------------------------------------------------
@@ -134,7 +142,7 @@ if steps.get("contains_obj", False):
                        night_dir,
                        overwrite=False)
     metadata_file = dataset_metadata(dataset, night_dir,
-                                    output_file=output_file)
+                                    output_file=images_file)
 
 # -------------------------------------------------------------------------
 # 6) Combination
@@ -150,7 +158,7 @@ if steps.get("combine", False):
         ra, dec = load_target_coordinates(objname, objects_csv)
         alig_cfg = cfg.get("aligment", {})["catalog"]
         # Load image path for the object
-        ds = pd.read_csv(Path(night_dir, output_file))
+        ds = pd.read_csv(Path(night_dir, images_file))
         img_files = ds[(ds["OBJECT"]==objname)&(ds["ASTROMET"]=="yes")]["FILENAME"].values
         img_path = night_dir / img_files[0]
 
@@ -185,7 +193,7 @@ if steps.get("combine", False):
                 removed = remove_aligment_tempfiles(filt, night_dir)
     dataset = scan_dataset(night_dir)
     metadata_file = dataset_metadata(dataset, night_dir,
-                                    output_file=output_file)
+                                    output_file=images_file)
 
 if cfg["qc"].get("combined_images", False):
     print("→ Generating combined plots")
@@ -200,15 +208,18 @@ if cfg["qc"].get("combined_images", False):
         
 if steps.get("photometry", False):
     print("→ Photometry on science images")
+    phot_cfg = cfg["photometry"]
+    img_files = []
+    if phot_cfg["on_exp"]:
+        img_files += dataset["images_astro"]
+    if phot_cfg["on_comb"]:
+        img_files += dataset["images_combined"]
+         
     for objname in objects:
         print(f"   → Object: {objname}")
         print(f"      → Generating reference catalog")
-
         ra, dec = load_target_coordinates(objname, objects_csv)
         phot_cat_cfg = cfg["photometry"]["catalog"]
-
-        ds = pd.read_csv(Path(night_dir, output_file))
-        img_files = ds[(ds["OBJECT"]==objname)&(ds["ASTROMET"]=="yes")]["FILENAME"].values
         img_path = night_dir / img_files[0]
         phot_cat_path = generate_refcat(
             objname=objname, ra_center=ra, dec_center=dec,
@@ -217,12 +228,12 @@ if steps.get("photometry", False):
             min_mag=phot_cat_cfg.get("min_mag", 9),
             max_mag=phot_cat_cfg.get("max_mag", 12),
             max_mag_err=phot_cat_cfg.get("max_mag_err", 0.25),
-            use_catalogs="all",
+            use_catalogs=phot_cat_cfg.get("use_catalogs", False),
             plot=phot_cat_cfg.get("plot", False),
             type="phot",
             overwrite=phot_cat_cfg.get("overwrite", False)
         )
-        print(f"      → Plotting catalog on combined images")
+        print(f"      → Plotting catalog on combined image")
         combined_im = [f for f in dataset["images_combined"] if objname in f.name][0]
         plot_catalog_on_image(fits_file=combined_im,
                         catalog=phot_cat_path,
@@ -230,9 +241,50 @@ if steps.get("photometry", False):
                         obj_dec=dec,
                         out_png=Path(object_path, objname, f"{objname}_phot_cat.png"),
                         title=f"{objname} – Aligment catalog")
-
-
         
+        print("   → Photometry settings")
+        image_files = []
+        if phot_cfg["on_comb"]:
+            image_files+=[f for f in dataset["images_combined"] if objname.lower() in str(f).lower()]
+        if phot_cfg["on_exp"]:
+            image_files+=[f for f in dataset["images_astro"] if objname.lower() in str(f).lower()]
 
+        refcat_csv = os.path.join(BASE, "data", "objetos", objname, f"{objname}_phot_cat.csv")
+        fits_dir = os.path.join(BASE, "data", night, objname, "phot")
+        os.makedirs(fits_dir, exist_ok=True)
+        for im in image_files:
+            shutil.copy(im, Path(fits_dir, im.name))
+        wdir = os.path.join(BASE, "outputs", night, objname)
+        os.makedirs(wdir, exist_ok=True)
 
+        #autophot_input = load()
+        autophot_input = phot_cfg["autophot"]
+        autophot_input["wdir"] = wdir
+        autophot_input["fits_dir"] = fits_dir
+
+        autophot_input["target_name"] = objname
+        autophot_input["target_ra"] = ra/15
+        autophot_input["target_dec"] = dec
+
+        autophot_input["catalog"]["use_catalog"] = "custom"
+        autophot_input["catalog"]["catalog_custom_fpath"] = refcat_csv
+        shutil.copy("telescope.yml", Path(wdir, "telescope.yml"))
+
+        try:
+            run_automatic_autophot(autophot_input)
+            os.chdir(BASE)
+            print(f"         ✓ AutoPhOT completado para {objname}")
+        except Exception as e:
+            print(f"         Error AutoPhOT {objname}: {str(e)}")
+            continue
+
+        append_last_row(
+            Path(night_dir, objname, "phot_REDUCED","REDUCED.csv"),
+            Path(object_path, objname, "lightcurve.csv"),
+            n_rows=len(image_files)
+        )
+        
+        # Delete calibrated intermediate science images ? bias, flats
+        # Delete duplicated images copied to run photometry?
+ 
 print("✓ Pipeline finished successfully")
