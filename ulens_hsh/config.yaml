@@ -73,20 +73,25 @@ photometry:
   on_comb: true       # do photometry on combined images?
   method: "aperture"  # "aperture" o "psf"
   autophot:
+    fits_dir: null
     method: sp
     ignore_no_telescop: false
-    outdir_name: "lightcurve"
-    outcsv_name: "REDUCED"
+    outdir_name: REDUCED
+    outcsv_name: REDUCED
     ignore_no_filter: true
     restart: false
     select_filter: false
-    do_filter: [None]
+    do_filter:
+      - null
+    target_name: null
+    target_ra: null
+    target_dec: null
     plot_source_selection: true
     preprocessing:
       trim_edges: false
       trim_edges_pixels: 50
       mask_sources: false
-      mask_sources_RADEC_R: None
+      mask_sources_RADEC_R: null
     photometry:
       do_ap_phot: false
       force_psf: false
@@ -117,12 +122,12 @@ photometry:
       cpulimit: 180
       update_wcs_scale: false
       use_xylist: false
-      TNS_BOT_ID: None
-      TNS_BOT_NAME: None
-      TNS_BOT_API: None
+      TNS_BOT_ID: null
+      TNS_BOT_NAME: null
+      TNS_BOT_API: null
     catalog:
-      use_catalog: "custom"
-      catalog_custom_fpath: None
+      use_catalog: null
+      catalog_custom_fpath: null
       catalog_radius: 0.25
       plot_catalog_nondetections: false
       include_IR_sequence_data: false
@@ -164,7 +169,7 @@ photometry:
       int_scale: 25
       scale_multipler: 4
       max_fit_fwhm: 30
-      use_catalog: None
+      use_catalog: null
     limiting_magnitude:
       force_lmag: false
       skip_lmag: false
@@ -205,7 +210,7 @@ photometry:
       save_PSF_models_fits: true
       save_PSF_stars: false
       use_PSF_starlist: false
-      PSF_starlist: None
+      PSF_starlist: null
     template_subtraction:
       do_subtraction: false
       do_ap_on_sub: false
@@ -232,6 +237,7 @@ photometry:
       zp_use_WA: false
       zp_use_max_bin: false
       matching_source_SNR_limit: 25
+
        
 qc: # quality checks
   reduction_images: false

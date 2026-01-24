@@ -1,0 +1,17 @@
+HSH:
+  INSTRUME:
+    Direct CCD:
+      AIRMASS: AIRMASS
+      FILTERS: FILTERS
+      GAIN: GAIN
+      I: I
+      Name: CASLEO HSH + Direct CCD
+      RDNOISE: RDNOISE
+      V: V
+      filter_key_0: FILTERS
+      pixel_scale: 0.53
+  location:
+    alt: 2591
+    lat: -31.787333333333336
+    lon: -69.30663888888888
+    name: CASLEO

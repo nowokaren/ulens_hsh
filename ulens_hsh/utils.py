@@ -58,5 +58,34 @@ class Tee:
 
 
 
+def append_last_row(
+    csv_origen,
+    csv_destino,
+    n_rows = 1
+):
+    csv_origen = Path(csv_origen)
+    csv_destino = Path(csv_destino)
+
+
+    df_src = pd.read_csv(csv_origen)
+
+    if df_src.empty:
+        raise ValueError("El CSV origen está vacío")
+
+    last_row = df_src.tail(n_rows)
+
+    if csv_destino.exists():
+        df_dst = pd.read_csv(csv_destino)
+        all_cols = sorted(set(df_dst.columns) | set(last_row.columns))
+        df_dst = df_dst.reindex(columns=all_cols)
+        last_row = last_row.reindex(columns=all_cols)
+        df_out = pd.concat([df_dst, last_row], ignore_index=True)
+    else:
+        df_out = last_row.copy()
+    df_out.to_csv(csv_destino, index=False)
+    return df_out
+
+
+
 
 
