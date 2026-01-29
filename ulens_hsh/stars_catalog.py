@@ -267,7 +267,7 @@ def plot_catalog_on_image(
         pad_inches=0.02
     )
     plt.close(fig)
-    print(f"      ✓ Plot saved: {out_png}")
+    print(f"         ✓ Plot saved: {out_png}")
     
     
 

@@ -358,7 +358,7 @@ def process_and_combine_images(image_files, objname, filter_band, objects_path,
     # -------------------- MEDICIÓN DE FWHM --------------------
     pixel_coords = [sky_to_pixel(image, reference_stars)[0] for image in image_files]
 
-    print(f"      ✓ Starting with {len(image_files)} images")
+    print(f"         Starting with {len(image_files)} images")
     
     valid_images = []
     fwhm_measurements = []
@@ -383,7 +383,7 @@ def process_and_combine_images(image_files, objname, filter_band, objects_path,
         fwhm_measurements.append(fwhm_result[3])
     
     removed_fwhm = len(image_files) - len(valid_images)
-    print(f"      ✓ Removed {removed_fwhm} images (invalid FWHM/stars). Remaining: {len(valid_images)}")
+    print(f"         Removed {removed_fwhm} images (invalid FWHM/stars). Remaining: {len(valid_images)}")
 
     if len(valid_images) < 2:
         raise RuntimeError("Not enough valid images to combine")
@@ -405,7 +405,7 @@ def process_and_combine_images(image_files, objname, filter_band, objects_path,
             print(f"      ⚠️  Rejected (bad seeing): {fname} (FWHM={fwhm_value:.2f})")
     
     removed_seeing = len(valid_images) - len(good_seeing_images)
-    print(f"      ✓ Removed {removed_seeing} images (bad seeing). Remaining: {len(good_seeing_images)}")
+    print(f"      Removed {removed_seeing} images (bad seeing). Remaining: {len(good_seeing_images)}")
 
     # -------------------- FOTOMETRÍA --------------------
     final_pixel_coords = [sky_to_pixel(image, reference_stars)[0] for image in good_seeing_images]
@@ -453,7 +453,7 @@ def process_and_combine_images(image_files, objname, filter_band, objects_path,
     
     fits.writeto(combined_image, combined_data, combined_header_unit.header, overwrite=True)
 
-    print(f"      ✓ Successfully combined {len(good_seeing_images)} images")
+    print(f"         ✓ Successfully combined {len(good_seeing_images)} images")
 
     return combined_image
 
@@ -618,9 +618,9 @@ def plot_aligment(dataset, night_dir, objname, filter_band, output_name=None, sh
     # ------------------------------------------------------------------
     # Figura
     # ------------------------------------------------------------------
-    fig = plt.figure(figsize=(12, 5*n))
+    fig = plt.figure(figsize=(10, 3*n))
     gs = GridSpec(
-        nrows=2*n, ncols=3,
+        nrows=n, ncols=3,
       #  hspace=0.30, wspace=0.15
     )
 
@@ -653,12 +653,12 @@ def plot_aligment(dataset, night_dir, objname, filter_band, output_name=None, sh
             ax_img.axis("off")
 
             # Estadísticas
-            s = img_stats(images[j])
-            txt = (f"μ={s['mean']:.2f}  med={s['median']:.2f}  σ={s['std']:.2f}\n"
-                   f"p5={s['p5']:.1f}  p95={s['p95']:.1f}  neg={100*s['neg_frac']:.2f}%")
-            ax_img.text(0.02, -0.10, txt, transform=ax_img.transAxes,
-                        fontsize=8, color="yellow",
-                        bbox=dict(facecolor="black", alpha=0.5, pad=2))
+            #s = img_stats(images[j])
+            #txt = (f"μ={s['mean']:.2f}  med={s['median']:.2f}  σ={s['std']:.2f}\n"
+            #       f"p5={s['p5']:.1f}  p95={s['p95']:.1f}  neg={100*s['neg_frac']:.2f}%")
+            #ax_img.text(0.02, -0.10, txt, transform=ax_img.transAxes,
+            #            fontsize=8, color="yellow",
+            #            bbox=dict(facecolor="black", alpha=0.5, pad=2))
 
             # Colorbar
             cb = fig.colorbar(im, ax=ax_img, fraction=0.03, pad=0.02)
