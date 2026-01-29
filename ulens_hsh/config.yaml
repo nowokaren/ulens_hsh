@@ -12,7 +12,6 @@ paths:
   objects_file: "objetos.csv"
   images_data_file: "images_data.csv"          
 
-
 instrument:
   gain: 2.0
   rdnoise: 15.7
@@ -23,8 +22,8 @@ steps:
   reduction: false
   astrometry: false
   contains_obj: false
-  combine: false
-  photometry: true
+  combine: true
+  photometry: false
   cleanup: false
   plots: false
 
@@ -57,6 +56,11 @@ combine:
   sigma_high: 3.0            # para "sigma"
   remove_temp_files: true
 
+qc: # quality checks
+  reduction_images: false
+  aligment_images: true
+  combined_images: false
+
 photometry:
   catalog:
     use_catalogs: "Gaia3"  # "Gaia3" or "Gaia_SN"
@@ -77,7 +81,7 @@ photometry:
     method: sp
     ignore_no_telescop: false
     outdir_name: REDUCED
-    outcsv_name: REDUCED
+    outcsv_name: photometry
     ignore_no_filter: true
     restart: false
     select_filter: false
@@ -239,6 +243,3 @@ photometry:
       matching_source_SNR_limit: 25
 
        
-qc: # quality checks
-  reduction_images: false
-  combined_images: false

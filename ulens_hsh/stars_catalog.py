@@ -183,8 +183,8 @@ def generate_refcat(objname, ra_center, dec_center,
 
         for cat in np.unique(df_out["catalog"]):
             m = df_out["catalog"].values == cat
-            x, y = w.world_to_pixel_values(df_out["ra"].astype(float),
-                                            df_out["dec"].astype(float))
+            x, y = w.world_to_pixel_values(df_out["RA"].astype(float),
+                                            df_out["DEC"].astype(float))
             ax.scatter(x, y, s=140, facecolors='none',
                         edgecolors=colors[cat], lw=2, label=cat)
     

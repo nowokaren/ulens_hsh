@@ -11,6 +11,9 @@ from datetime import datetime as dt
 from tqdm.auto import tqdm
 from pathlib import Path
 import matplotlib.pyplot as plt
+from fits_io import read_fits_data, img_stats
+from matplotlib.gridspec import GridSpec
+import re
 
 #Delete files from possible previous run from the list
 
@@ -117,34 +120,33 @@ def shift(imfiles):
 
 
 #Alingment with wcs
-def algn_with_wcs(imfiles,band):
+def algn_with_wcs(imfiles):
+    '''imfiles: list of path of images to be combined (all images must have the same filter band)'''
     #Read image headers
-
     hdu_list = [fits.open(imfiles[i])[0] for i in range(len(imfiles))]
     #Use middle image to align
-    if len(hdu_list)>1:
-        ref_index=int(len(hdu_list)/2)
+    if len(hdu_list) > 1:
+        ref_index = int(len(hdu_list) / 2)
         hdu1 = hdu_list[ref_index]
     else:
-        ref_index=0
-        hdu1=hdu_list[ref_index]
+        ref_index = 0
+        hdu1 = hdu_list[ref_index]
 
+    aligned_imgs = []
     for i in range(len(imfiles)):
         impath = str(imfiles[i])
-        if i != ref_index: # and i not in etrem_indx:
+        if i != ref_index:
             hdu2 = hdu_list[i]
-            array,footprint = reproject_interp(input_data=hdu2,
-                                              output_projection=hdu1.header)
+            array, footprint = reproject_interp(input_data=hdu2,
+                                                output_projection=hdu1.header)
             #Save aligned images into fits files
-            fits.writeto(impath[:-5]+'_trans.fits', array, hdu1.header,
-                         overwrite=True)
-    #Create and save the combination list with the aligned images
-    aligned_imgs = [impath[:-5]+'_trans.fits'
-                    for i in range(len(imfiles)) 
-                    if imfiles[i]!=imfiles[ref_index]] # i not in etrem_indx
-                   # and imfiles[i]!=imfiles[ref_index]]
-    aligned_imgs.insert(ref_index,imfiles[ref_index])
-    return(aligned_imgs)
+            trans_path = impath[:-5] + '_trans.fits'
+            fits.writeto(trans_path, array, hdu1.header, overwrite=True)
+            aligned_imgs.append(trans_path)
+        else:
+            aligned_imgs.append(impath)
+    
+    return aligned_imgs
 
 #Combination
 def comb(objname, filter_band, comb_list,scaled_list, objects_csv, output_path="."):
@@ -173,7 +175,7 @@ def comb(objname, filter_band, comb_list,scaled_list, objects_csv, output_path="
     mean_AIRM = np.mean(AIRM)
     #Read ulens coordinates
     df = pd.read_csv(objects_csv)
-    snradeg,sndecdeg = df[df["objeto"]==objname][["ra_deg", "dec_deg"]].values[0]
+    radeg,decdeg = df[df["objeto"]==objname][["ra_deg", "dec_deg"]].values[0]
     #Update combined image header
     with fits.open(combine_file,'update') as f:
         for hdu in f:
@@ -188,10 +190,10 @@ def comb(objname, filter_band, comb_list,scaled_list, objects_csv, output_path="
             hdu.header['MJD-OBS']  = (mean_MJD, 'mean MJD of observation')
             hdu.header['AIRMASS']  = (mean_AIRM, 'mean airmass')
     hdusal=fits.open(combine_file,'update')
-    hdusal[0].header.insert(26,('SNRA',snradeg,'SN RA in Deg'))
-    hdusal[0].header.insert(27,('SNDEC',sndecdeg,'SN DEC in Deg'))
+    hdusal[0].header.insert(26,('OBJ_RA',radeg,'Science object RA in Deg'))
+    hdusal[0].header.insert(27,('OBJ_DEC',decdeg,'Science object DEC in Deg'))
     hdusal.close()
-    return(combine_file)
+    return combine_file
 
 #Calculate mean FWHM in X and Y axis for one image.
 def FWHM_im(image, center, box=15, fwhm_default=4.0):
@@ -252,7 +254,7 @@ def sky_to_pixel(img, stars, margin=5):
     with fits.open(img) as hdul:
         ny, nx = hdul[0].data.shape
         w = wcs.WCS(hdul[0].header)
-        coords = stars[["ra", "dec"]].values
+        coords = stars[["RA", "DEC"]].values
         pix_coord = w.wcs_world2pix(coords, 0)
 
         #pix_coord = w.wcs_world2pix(stars.iloc[:, [0, 1]].values,0)
@@ -356,6 +358,8 @@ def process_and_combine_images(image_files, objname, filter_band, objects_path,
     # -------------------- MEDICIÓN DE FWHM --------------------
     pixel_coords = [sky_to_pixel(image, reference_stars)[0] for image in image_files]
 
+    print(f"      ✓ Starting with {len(image_files)} images")
+    
     valid_images = []
     fwhm_measurements = []
     # -------------------- FILTRADO POR FWHM --------------------
@@ -363,18 +367,23 @@ def process_and_combine_images(image_files, objname, filter_band, objects_path,
                                                desc=f"         FWHM Measurement", total=len(image_files)):
         # Si no hay estrellas válidas, omitir imagen
         if len(image_pixel_coords) == 0:
-            print(f"      ❌ No stars found in {image_path}")
+            fname = image_path.name if hasattr(image_path, 'name') else image_path.split('/')[-1]
+            print(f"      ❌ No stars found in {fname}")
             continue
         
         first_star_center = tuple(map(float, image_pixel_coords[0]))
         fwhm_result = FWHM_im(image_path, first_star_center)
         # 
         if fwhm_result[3] <= 0:
-            print(f"      ❌ Invalid FWHM in {image_path}")
+            fname = image_path.name if hasattr(image_path, 'name') else image_path.split('/')[-1]
+            print(f"      ❌ Invalid FWHM in {fname}")
             continue
 
         valid_images.append(image_path)
         fwhm_measurements.append(fwhm_result[3])
+    
+    removed_fwhm = len(image_files) - len(valid_images)
+    print(f"      ✓ Removed {removed_fwhm} images (invalid FWHM/stars). Remaining: {len(valid_images)}")
 
     if len(valid_images) < 2:
         raise RuntimeError("Not enough valid images to combine")
@@ -392,7 +401,11 @@ def process_and_combine_images(image_files, objname, filter_band, objects_path,
             good_seeing_images.append(image_path)
             good_seeing_fwhms.append(fwhm_value)
         else:
-            print(f"Image {image_path} rejected (bad seeing)")
+            fname = image_path.name if hasattr(image_path, 'name') else image_path.split('/')[-1]
+            print(f"      ⚠️  Rejected (bad seeing): {fname} (FWHM={fwhm_value:.2f})")
+    
+    removed_seeing = len(valid_images) - len(good_seeing_images)
+    print(f"      ✓ Removed {removed_seeing} images (bad seeing). Remaining: {len(good_seeing_images)}")
 
     # -------------------- FOTOMETRÍA --------------------
     final_pixel_coords = [sky_to_pixel(image, reference_stars)[0] for image in good_seeing_images]
@@ -410,7 +423,7 @@ def process_and_combine_images(image_files, objname, filter_band, objects_path,
     reference_flux_value = measured_fluxes[reference_image_idx]
 
     # -------------------- ALINEADO CON WCS --------------------
-    aligned_image_files = algn_with_wcs(good_seeing_images, filter_band)
+    aligned_image_files = algn_with_wcs(good_seeing_images)
 
     # -------------------- ESCALADO --------------------
     scaled_image_files = []
@@ -425,93 +438,25 @@ def process_and_combine_images(image_files, objname, filter_band, objects_path,
         fits.writeto(output_filename, scaled_data, header_data_unit.header, overwrite=True)
         scaled_image_files.append(output_filename)
 
+
     # -------------------- COMBINACIÓN --------------------
     with open('input_combine.lst', 'w') as combine_list_file:
         combine_list_file.write('\n'.join(scaled_image_files) + '\n')
     
+    
     combined_image = comb(objname, filter_band, good_seeing_images, 
                           'input_combine.lst', objects_csv, output_path)
-
+    
     # -------------------- RESTAURAR FONDO --------------------
     combined_header_unit = fits.open(combined_image)[0]
     combined_data = fits.getdata(combined_image) + np.mean(measured_backgrounds)
     
     fits.writeto(combined_image, combined_data, combined_header_unit.header, overwrite=True)
 
+    print(f"      ✓ Successfully combined {len(good_seeing_images)} images")
+
     return combined_image
 
-'''
-def process_and_combine_images(image_files, objname, filt, object_dir):
-    """Process aligned images: measure FWHM, filter, photometry, scale & combine."""
-    
-    # Load reference stars
-    stars = pd.read_csv(
-        object_dir / 'objetos' / objname / f'{objname}_alig_cat.csv',
-        delim_whitespace=True, comment='#', header=None
-    )
-    
-    # Measure FWHM for all images
-    xy, fwhms = [], []
-    for im_path in image_files:
-        star_pos = sky_to_pixel(im_path, stars)
-        xy.append(star_pos)
-        if star_pos:
-            fwhm = FWHM_im(im_path, (float(star_pos[0][0]), float(star_pos[0][1])))[3]
-        else:
-            print(f"❌ No valid stars in {im_path}")
-            fwhm = 4.0
-        fwhms.append(fwhm)
-    
-    fwhms = np.array(fwhms)
-    
-    # Filter by 3-sigma clipping
-    mean_fwhm = np.mean(fwhms)
-    std_fwhm = np.std(fwhms)
-    good = np.abs(fwhms - mean_fwhm) <= 3 * std_fwhm
-    
-    imfiles2 = [image_files[i] for i, g in enumerate(good) if g]
-    fwhm_4ap = fwhms[good]
-    xy2 = [xy[i] for i, g in enumerate(good) if g]
-    
-    print(f"✓ Kept {len(imfiles2)}/{len(fwhms)} images by seeing quality")
-    
-    # Measure flux and background
-    im_flux, im_bkg = [], []
-    for i in range(len(imfiles2)):
-        fx, bg = bg_flux_im(imfiles2[i], xy2[i], fwhm_4ap[i])
-        im_flux.append(fx)
-        im_bkg.append(bg)
-    
-    # Reference image (middle)
-    ref_idx = len(imfiles2) // 2
-    ref_flux, _ = bg_flux_im(imfiles2[ref_idx], xy2[ref_idx], fwhm_4ap[ref_idx])
-    
-    # Align & scale
-    trans_files = algn_with_wcs(imfiles2, filt)
-    scal_files = []
-    
-    for i, trans_file in enumerate(trans_files):
-        hdu = fits.open(trans_file)[0]
-        data = np.array(fits.getdata(trans_file), dtype=np.float64)
-        data_norm = (data - im_bkg[i]) * (ref_flux / im_flux[i])
-        data_norm = np.nan_to_num(data_norm)
-        
-        scal_file = trans_file[:-5] + '_scaled.fits'
-        fits.writeto(scal_file, data_norm, hdu.header, overwrite=True)
-        scal_files.append(scal_file)
-    
-    # Combine
-    with open('input_combine.lst', 'w') as f:
-        f.write('\n'.join(scal_files) + '\n')
-    
-    comb_img = comb(imfiles2, 'input_combine.lst')
-    
-    # Add mean background back
-    data = fits.getdata(comb_img)
-    fits.writeto(comb_img, data + np.mean(im_bkg), fits.getheader(comb_img), overwrite=True)
-    
-    return comb_img
-'''
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -573,9 +518,9 @@ def plot_combined(objname, img_files, output_path, show=True):
         fraction=0.03,
         pad=0.02
     )
-    cbar.ax.tick_params(labelsize=8)
+    cbar.ax.tick_params(labelsize=6)
 
-    fig.suptitle(f"Combined images of {objname}", fontsize=12)
+    fig.suptitle(f"Combined images of {objname}", fontsize=8)
 
     fig.savefig(
         output_path / f"combined_{objname}.png",
@@ -590,3 +535,154 @@ def plot_combined(objname, img_files, output_path, show=True):
     print(f"      ✓ Combined plot saved: {output_path / f'combined_{objname}.png'}")
     plt.close(fig)
 
+
+
+
+def plot_aligment(dataset, night_dir, objname, filter_band, output_name=None, show=False,
+                   overwrite=False):
+    """
+    Genera un plot de control de calidad de la alineación:
+    Calibrated, aligned, 
+
+    Parameters
+    ----------
+    dataset : dict
+        Diccionario devuelto por scan_dataset().
+    night_dir : Path
+        Directorio de la noche.
+    objname : str
+        Nombre del objeto (para filtrar archivos).
+    output_name : str or None
+        Nombre del archivo de salida. Si None, se usa 'reduction_<obj>.png'.
+    show : bool
+        Si True, muestra el plot en pantalla.
+    overwrite : bool
+        Si False y la imágen existe, no hace nada.
+    """
+
+    output_name = f"aligment_{objname}_{filter_band}.png"
+    output_path = night_dir / output_name
+    if output_path.exists() and not overwrite:
+        print(f"      ✓ Plot already exists: {output_path} (overwrite=False). Skipping.")
+        return output_path
+
+    # ------------------------------------------------------------------
+    # Selección de archivos desde el dataset
+    # ------------------------------------------------------------------
+    if isinstance(dataset, str) and dataset.endswith(".csv"):
+
+        ds = pd.read_csv(Path(dataset))
+        ds_obj = ds[(ds["OBJECT"] == objname) & (ds["ASTROMET"]=="yes") & 
+                    (~ds["FILENAME"].str.contains("comb", na=False)) &
+                    (ds["FILTERS"] == filter_band)
+                    ]
+        calib_files = [
+            Path(night_dir, fname)
+            for fname in ds_obj["FILENAME"] if not "trans" in fname 
+            and not "scaled" in fname
+        ]
+        files = ds_obj["FILENAME"]
+        ver = files.str.extract(rf'{filter_band.lower()}(\d{{4}})')[0]
+        is_trans = files.str.endswith("_wcs_trans.fits")
+        is_wcs   = files.str.endswith("_wcs.fits")
+        missing = set(ver[is_wcs]) - set(ver[is_trans])
+        mask = is_trans | (is_wcs & ver.isin(missing))
+        alig_files = sorted(
+            [Path(night_dir, f) for f in files[mask]],
+            key=lambda p: int(re.search(rf'{filter_band.lower()}(\d{{4}})', p.name).group(1))
+        )
+        scaled_files = [
+            Path(night_dir, fname)
+            for fname in ds_obj["FILENAME"] if fname.endswith("_scaled.fits") 
+        ]
+        
+    else:
+        raise ValueError("dataset debe la ruta a un CSV de metadatos.")
+        
+        
+    calib = sorted(calib_files)
+    alig = sorted(alig_files)
+    scaled = sorted(scaled_files)
+
+    if not (len(calib) == len(alig) == len(scaled)):
+        print(len(calib))
+        print(len(alig))
+        print(len(scaled))
+        raise ValueError("La cantidad de RAW, Bias y FlatBias no coincide.")
+
+    n = len(calib)
+    
+    if n==0:
+        print(f"      No images for object {objname}")
+
+    # ------------------------------------------------------------------
+    # Figura
+    # ------------------------------------------------------------------
+    fig = plt.figure(figsize=(12, 5*n))
+    gs = GridSpec(
+        nrows=2*n, ncols=3,
+      #  hspace=0.30, wspace=0.15
+    )
+
+    for i in tqdm(range(n), desc=f"      → Generating aligment plots"):
+        row = i
+
+        calib_img = read_fits_data(calib[i])
+        alig_img  = read_fits_data(alig[i])
+        scaled_img = read_fits_data(scaled[i])
+
+        vmin = np.percentile(calib_img, 5)
+        vmax = np.percentile(calib_img, 99)
+
+        images = [calib_img, alig_img, scaled_img]
+        titles = [
+            "Calibrated: " + calib[i].stem,
+            "Aligned: " + alig[i].stem,
+            "Scaled: " + scaled[i].stem
+        ]
+        cmaps  = ["gray", "gray", "gray"]
+        vmins  = [vmin, vmin, vmin]
+        vmaxs  = [vmax, vmax, vmax]
+
+        # Estadísticas
+        for j in range(3):
+            ax_img = fig.add_subplot(gs[row, j])
+            im = ax_img.imshow(images[j], origin="lower",
+                               cmap=cmaps[j], vmin=vmins[j], vmax=vmaxs[j])
+            ax_img.set_title(titles[j], fontsize=8)
+            ax_img.axis("off")
+
+            # Estadísticas
+            s = img_stats(images[j])
+            txt = (f"μ={s['mean']:.2f}  med={s['median']:.2f}  σ={s['std']:.2f}\n"
+                   f"p5={s['p5']:.1f}  p95={s['p95']:.1f}  neg={100*s['neg_frac']:.2f}%")
+            ax_img.text(0.02, -0.10, txt, transform=ax_img.transAxes,
+                        fontsize=8, color="yellow",
+                        bbox=dict(facecolor="black", alpha=0.5, pad=2))
+
+            # Colorbar
+            cb = fig.colorbar(im, ax=ax_img, fraction=0.03, pad=0.02)
+            cb.ax.tick_params(labelsize=7)
+
+    #fig.subplots_adjust(top=0.94)
+    fig.suptitle(
+        f"Noche: {night_dir.name}   |   Objeto: {objname}",
+        fontsize=12,
+        y=0.9
+    )
+
+    # ------------------------------------------------------------------
+    # Guardar
+    # ------------------------------------------------------------------
+    if output_name is None:
+        output_name = f"aligment_{objname}.png"
+
+    output_path = night_dir / output_name
+    plt.savefig(output_path, bbox_inches="tight", pad_inches=0.05, dpi=150)
+    print(f"      ✓ Plot saved as {output_path}")
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+
+    return output_path

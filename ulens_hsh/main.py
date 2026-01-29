@@ -4,7 +4,7 @@ from fits_io import flag_object_in_fov, load_dataset_objects
 from reduccion import run_reduction, plot_reduction
 from astrometria import run_astrometry
 from stars_catalog import generate_refcat, plot_catalog_on_image
-from combine import process_and_combine_images, plot_combined, remove_aligment_tempfiles
+from combine import process_and_combine_images, plot_combined, remove_aligment_tempfiles, plot_aligment
 import pandas as pd
 from pathlib import Path
 import os
@@ -133,7 +133,7 @@ if steps.get("astrometry", False):
     metadata_file = dataset_metadata(dataset, night_dir,
                                     output_file=images_file)
 # -------------------------------------------------------------------------
-# 5.5) Images contains its object?
+# 5.a) Images contains its object?
 # -------------------------------------------------------------------------
 if steps.get("contains_obj", False):
     print("→ Flagging not contained images")
@@ -188,12 +188,27 @@ if steps.get("combine", False):
                                   obj_dec=dec,
                                   out_png=Path(night_dir, f"{objname}{filt}_comb_alig_cat.png"),
                                   title=f"{objname} – Aligment catalog")
+            if cfg["qc"].get("aligment_images", False):
+                dataset = scan_dataset(night_dir)
+                metadata_file = dataset_metadata(dataset, night_dir,
+                                    output_file=images_file)
+                print("      → Plotting aligment images")
+                plot_aligment(
+                    dataset=str(images_file),
+                    night_dir=night_dir,
+                    objname=objname,
+                    filter_band=filt,
+                    output_name=f"aligment_{objname}.png",
+                    show=False,
+                    overwrite=True
+                )
             if cfg["combine"].get("remove_temp_files", False):
                 print("      → Removing temporary files")
                 removed = remove_aligment_tempfiles(filt, night_dir)
     dataset = scan_dataset(night_dir)
     metadata_file = dataset_metadata(dataset, night_dir,
                                     output_file=images_file)
+    
 
 if cfg["qc"].get("combined_images", False):
     print("→ Generating combined plots")

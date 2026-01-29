@@ -1,9 +1,6 @@
-import astropy
 from astropy.io import fits
-from astropy.io.fits import getheader
 from astropy.io.fits import getval
 from astropy import stats
-from astropy.time import Time
 import ccdproc
 from ccdproc import ImageFileCollection
 import numpy as np
@@ -11,11 +8,7 @@ import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')  # Backend no GUI, salva plots sin display
 from pathlib import Path
-import multiprocessing
-import time
-import os
-import json
-import requests
+
 from pathlib import Path
 from astropy.io import fits
 from astropy.wcs import WCS
@@ -23,7 +16,6 @@ import warnings
 from astropy.utils.exceptions import ErfaWarning
 warnings.filterwarnings("ignore", category=ErfaWarning)
 from fits_io import scan_dataset, imstats, read_fits_data, img_stats
-# al inicio del programa
 from astropy import log
 log.setLevel('ERROR')
 from matplotlib.gridspec import GridSpec
@@ -553,7 +545,9 @@ def plot_reduction(dataset, night_dir, objname, output_name=None, show=False,
             # ---- Histograma ----
             ax_hist = fig.add_subplot(gs[row_hist, j])
             data = images[j].ravel()
-            ax_hist.hist(data, bins=120)
+            p95 = np.percentile(data, 95)
+            p5 = np.percentile(data, 5)
+            ax_hist.hist(data, bins=120, range=(p5, p95))
             ax_hist.tick_params(labelsize=6)
             if j == 0:
                 ax_hist.set_ylabel("N", fontsize=7)
