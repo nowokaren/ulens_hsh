@@ -538,11 +538,11 @@ def plot_combined(objname, img_files, output_path, show=True):
 
 
 
-def plot_aligment(dataset, night_dir, objname, filter_band, output_name=None, show=False,
+def plot_alignment(dataset, night_dir, objname, filter_band, obj_ra, obj_dec, output_name=None, show=False,
                    overwrite=False):
     """
     Genera un plot de control de calidad de la alineación:
-    Calibrated, aligned, 
+    Calibrated, aligned, scaled. Con círculo centrado en el objeto.
 
     Parameters
     ----------
@@ -552,12 +552,19 @@ def plot_aligment(dataset, night_dir, objname, filter_band, output_name=None, sh
         Directorio de la noche.
     objname : str
         Nombre del objeto (para filtrar archivos).
+    filter_band : str
+        Banda fotométrica.
+    obj_ra : float
+        Right Ascension of the object in degrees.
+    obj_dec : float
+        Declination of the object in degrees.
     output_name : str or None
         Nombre del archivo de salida. Si None, se usa 'reduction_<obj>.png'.
     show : bool
         Si True, muestra el plot en pantalla.
     overwrite : bool
         Si False y la imágen existe, no hace nada.
+
     """
 
     output_name = f"aligment_{objname}_{filter_band}.png"
@@ -621,7 +628,6 @@ def plot_aligment(dataset, night_dir, objname, filter_band, output_name=None, sh
     fig = plt.figure(figsize=(10, 3*n))
     gs = GridSpec(
         nrows=n, ncols=3,
-      #  hspace=0.30, wspace=0.15
     )
 
     for i in tqdm(range(n), desc=f"      → Generating aligment plots"):
@@ -643,6 +649,7 @@ def plot_aligment(dataset, night_dir, objname, filter_band, output_name=None, sh
         cmaps  = ["gray", "gray", "gray"]
         vmins  = [vmin, vmin, vmin]
         vmaxs  = [vmax, vmax, vmax]
+        files_list = [calib[i], alig[i], scaled[i]]
 
         # Estadísticas
         for j in range(3):
@@ -652,19 +659,19 @@ def plot_aligment(dataset, night_dir, objname, filter_band, output_name=None, sh
             ax_img.set_title(titles[j], fontsize=8)
             ax_img.axis("off")
 
-            # Estadísticas
-            #s = img_stats(images[j])
-            #txt = (f"μ={s['mean']:.2f}  med={s['median']:.2f}  σ={s['std']:.2f}\n"
-            #       f"p5={s['p5']:.1f}  p95={s['p95']:.1f}  neg={100*s['neg_frac']:.2f}%")
-            #ax_img.text(0.02, -0.10, txt, transform=ax_img.transAxes,
-            #            fontsize=8, color="yellow",
-            #            bbox=dict(facecolor="black", alpha=0.5, pad=2))
+            # Plot circle on object if coordinates available
+            if obj_ra is not None and obj_dec is not None:
+                with fits.open(files_list[j]) as hdul:
+                    w = wcs.WCS(hdul[0].header)
+                    pix_x, pix_y = w.wcs_world2pix([[obj_ra, obj_dec]], 0)[0]
+                    circle = plt.Circle((pix_x, pix_y), radius=20, 
+                                       color='yellow', fill=False, linewidth=1)
+                    ax_img.add_patch(circle)
 
             # Colorbar
             cb = fig.colorbar(im, ax=ax_img, fraction=0.03, pad=0.02)
             cb.ax.tick_params(labelsize=7)
 
-    #fig.subplots_adjust(top=0.94)
     fig.suptitle(
         f"Noche: {night_dir.name}   |   Objeto: {objname}",
         fontsize=12,
@@ -680,6 +687,147 @@ def plot_aligment(dataset, night_dir, objname, filter_band, output_name=None, sh
     output_path = night_dir / output_name
     plt.savefig(output_path, bbox_inches="tight", pad_inches=0.05, dpi=150)
     print(f"      ✓ Plot saved as {output_path}")
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+
+    return output_path
+
+def plot_alignment_qc(dataset, night_dir, objname, filter_band,
+                    obj_ra, obj_dec, fwhm_dict=None,
+                    flux_scale_dict=None,
+                    output_name=None, show=False, overwrite=False):
+
+    output_name = f"qc_alignment_{objname}_{filter_band}.png"
+    output_path = night_dir / output_name
+    if output_path.exists() and not overwrite:
+        print(f"      ✓ Plot already exists: {output_path}")
+        return output_path
+
+    # ---------- Leer dataset ----------
+    if isinstance(dataset, str) and dataset.endswith(".csv"):
+
+        ds = pd.read_csv(Path(dataset))
+        ds_obj = ds[(ds["OBJECT"] == objname) & (ds["ASTROMET"]=="yes") & 
+                    (~ds["FILENAME"].str.contains("comb", na=False)) &
+                    (ds["FILTERS"] == filter_band)
+                    ]
+        calib_files = [
+            Path(night_dir, fname)
+            for fname in ds_obj["FILENAME"] if not "trans" in fname 
+            and not "scaled" in fname
+        ]
+        files = ds_obj["FILENAME"]
+        ver = files.str.extract(rf'{filter_band.lower()}(\d{{4}})')[0]
+        is_trans = files.str.endswith("_wcs_trans.fits")
+        is_wcs   = files.str.endswith("_wcs.fits")
+        missing = set(ver[is_wcs]) - set(ver[is_trans])
+        mask = is_trans | (is_wcs & ver.isin(missing))
+        alig_files = sorted(
+            [Path(night_dir, f) for f in files[mask]],
+            key=lambda p: int(re.search(rf'{filter_band.lower()}(\d{{4}})', p.name).group(1))
+        )
+        scaled_files = [
+            Path(night_dir, fname)
+            for fname in ds_obj["FILENAME"] if fname.endswith("_scaled.fits") 
+        ]
+        
+    else:
+        raise ValueError("dataset debe la ruta a un CSV de metadatos.")
+
+    calib = sorted(calib_files)
+    alig = sorted(alig_files)
+    scaled = sorted(scaled_files)
+    
+    n = len(calib)
+    if n == 0:
+        print("No images found")
+        return
+
+    # Imagen de referencia para residuos
+    ref_img = fits.getdata(alig[len(alig)//2])
+
+    fig = plt.figure(figsize=(18, 4*n))
+    gs = GridSpec(nrows=n, ncols=5)
+
+    cut = 30  # tamaño del zoom
+
+    for i in tqdm(range(n), desc="QC plots"):
+        imgs = [fits.getdata(calib[i]),
+                fits.getdata(alig[i]),
+                fits.getdata(scaled[i])]
+        files_list = [calib[i], alig[i], scaled[i]]
+        labels = ["Calibrated", "Aligned", "Scaled"]
+
+        for k in range(3):
+
+            img = imgs[k]
+            with fits.open(files_list[k]) as hdul:
+                w = wcs.WCS(hdul[0].header)
+                px, py = w.wcs_world2pix([[obj_ra, obj_dec]], 0)[0]
+
+            x, y = int(px), int(py)
+            sub = img[y-cut:y+cut, x-cut:x+cut]
+
+            # ---------- Imagen completa ----------
+            ax = fig.add_subplot(gs[i, 0])
+            vmin, vmax = np.percentile(img, (5, 99))
+            ax.imshow(img, origin="lower", cmap="gray", vmin=vmin, vmax=vmax)
+            ax.set_title(labels[k], fontsize=9)
+            ax.axis("off")
+            ax.add_patch(plt.Circle((px, py), 20, color='red', fill=False))
+
+            # ---------- Zoom ----------
+            axz = fig.add_subplot(gs[i, 1])
+            med = np.median(sub)
+            std = np.std(sub)
+            axz.imshow(sub, origin="lower", cmap="gray",
+                        vmin=med-3*std, vmax=med+10*std)
+            axz.set_title("Zoom", fontsize=8)
+            axz.axis("off")
+
+            # Métricas
+            flux = np.sum(sub - med)
+            snr = flux / (std*np.sqrt(sub.size))
+            fwhm_val = fwhm_dict.get(files_list[k].name, np.nan) if fwhm_dict else np.nan
+            scale_val = flux_scale_dict.get(files_list[k].name, 1.0) if flux_scale_dict else 1.0
+
+            txt = f"FWHM={fwhm_val:.2f}\nScale={scale_val:.2f}\nBkg={med:.1f}\nσ={std:.1f}\nS/N≈{snr:.1f}"
+            axz.text(0.02, -0.25, txt, transform=axz.transAxes, fontsize=8, va='top')
+
+            # ---------- Residuo ----------
+            axr = fig.add_subplot(gs[i, 2])
+            if k == 1:  # residuos solo para alineadas
+                res = sub - ref_img[y-cut:y+cut, x-cut:x+cut]
+                rstd = np.std(res)
+                axr.imshow(res, origin="lower", cmap="coolwarm",
+                            vmin=-3*rstd, vmax=3*rstd)
+                axr.set_title("Residual", fontsize=8)
+            axr.axis("off")
+
+            # ---------- Perfil radial ----------
+            axp = fig.add_subplot(gs[i, 3])
+            yy, xx = np.indices(sub.shape)
+            r = np.sqrt((xx-cut)**2 + (yy-cut)**2).astype(int)
+            tbin = np.bincount(r.ravel(), sub.ravel())
+            nr = np.bincount(r.ravel())
+            radial_profile = tbin / np.maximum(nr, 1)
+            axp.plot(radial_profile, lw=1)
+            axp.set_title("Radial profile", fontsize=8)
+            axp.set_xlim(0, cut)
+
+            # ---------- Histograma fondo ----------
+            axh = fig.add_subplot(gs[i, 4])
+            axh.hist(sub.ravel(), bins=40, histtype="step")
+            axh.axvline(med, color='r', ls='--')
+            axh.set_title("Background hist", fontsize=8)
+
+    fig.suptitle(f"QC Alignment — {objname} ({filter_band})", fontsize=14)
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150)
+    print(f"      ✓ QC plot saved: {output_path}")
+
     if show:
         plt.show()
     else:

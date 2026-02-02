@@ -468,10 +468,10 @@ def plot_reduction(dataset, night_dir, objname, output_name=None, show=False,
     gs = GridSpec(
         nrows=2*n, ncols=5,
         height_ratios=[4, 1]*n,
-        hspace=0.30, wspace=0.15
+        hspace=0.35, wspace=0.15
     )
 
-    for i in tqdm(range(n), desc=f"      → Generating reduction plots"):
+    for i in tqdm(range(n), desc=f"      → Plotting images"):
         row_img  = 2*i
         row_hist = 2*i + 1
 
@@ -482,8 +482,14 @@ def plot_reduction(dataset, night_dir, objname, output_name=None, show=False,
         diff_rb = raw_img - b_img
         diff_bf = b_img - fb_img
 
-        vmin = np.percentile(raw_img, 5)
-        vmax = np.percentile(raw_img, 99)
+        vmin_raw = np.percentile(raw_img, 5)
+        vmax_raw = np.percentile(raw_img, 99)
+        
+        vmin_b = np.percentile(b_img, 5)
+        vmax_b = np.percentile(b_img, 99)
+        
+        vmin_fb = np.percentile(fb_img, 5)
+        vmax_fb = np.percentile(fb_img, 99)
 
         dmax_rb = np.percentile(np.abs(diff_rb), 99)
         dmax_bf = np.percentile(np.abs(diff_bf), 99)
@@ -497,16 +503,16 @@ def plot_reduction(dataset, night_dir, objname, output_name=None, show=False,
             "Bias − FlatBias"
         ]
         cmaps  = ["gray", "gray", "seismic", "gray", "seismic"]
-        vmins  = [vmin, vmin, -dmax_rb, vmin, -dmax_bf]
-        vmaxs  = [vmax, vmax,  dmax_rb, vmax,  dmax_bf]
+        vmins  = [vmin_raw, vmin_b, -dmax_rb, vmin_fb, -dmax_bf]
+        vmaxs  = [vmax_raw, vmax_b,  dmax_rb, vmax_fb,  dmax_bf]
 
         # Estadísticas
         s_raw = img_stats(raw_img)
         s_rb  = img_stats(diff_rb)
 
         flags = []
-        if abs(s_rb["median"]) > MEDIAN_TOL:
-            flags.append("MED≠0")
+        #if abs(s_rb["median"]) > MEDIAN_TOL:
+        #    flags.append("MED≠0")
         if s_rb["std"] > NOISE_RATIO * s_raw["std"]:
             flags.append("NOISE↑")
         if s_rb["neg_frac"] > NEG_FRAC_MAX:
@@ -527,7 +533,7 @@ def plot_reduction(dataset, night_dir, objname, output_name=None, show=False,
             s = img_stats(images[j])
             txt = (f"μ={s['mean']:.2f}  med={s['median']:.2f}  σ={s['std']:.2f}\n"
                    f"p5={s['p5']:.1f}  p95={s['p95']:.1f}  neg={100*s['neg_frac']:.2f}%")
-            ax_img.text(0.02, -0.10, txt, transform=ax_img.transAxes,
+            ax_img.text(0.02, -0.14, txt, transform=ax_img.transAxes,
                         fontsize=8, color="yellow",
                         bbox=dict(facecolor="black", alpha=0.5, pad=2))
 
@@ -545,9 +551,9 @@ def plot_reduction(dataset, night_dir, objname, output_name=None, show=False,
             # ---- Histograma ----
             ax_hist = fig.add_subplot(gs[row_hist, j])
             data = images[j].ravel()
-            p95 = np.percentile(data, 95)
-            p5 = np.percentile(data, 5)
-            ax_hist.hist(data, bins=120, range=(p5, p95))
+            p99 = np.percentile(data, 99)
+            p1 = np.percentile(data, 1)
+            ax_hist.hist(data, bins=120, range=(p1, p99))
             ax_hist.tick_params(labelsize=6)
             if j == 0:
                 ax_hist.set_ylabel("N", fontsize=7)

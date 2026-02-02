@@ -205,7 +205,7 @@ def dataset_metadata(dataset, night_dir, output_file="images_data.csv",
     keys = [
         'IMAGETYP', 'CALIBZ', 'CALIBF', 'ASTROMET', 'OBJECT', 'RA', 'DEC', 'EXPTIME', 'GAIN',
         'RDNOISE', 'FILTERS', 'DATE-OBS', 'TIME-OBS', 'MJD-OBS', 'AIRMASS',
-        'FILENAME', 'OBJ_MATCH_STATUS', 'CONTAINS_OBJECT'
+        'FILENAME', 'OBJ_MATCH_STATUS', 'CONTAINS_OBJECT', "NCOMBINE"
     ]
 
     if load_changes and output_path.exists():
@@ -303,99 +303,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-'''
-def dataset_metadata(dataset, night_dir, output_file="images_data.csv",
-                     objects_csv=None, max_sep_deg=0.5):
-    """
-    Genera una tabla con información del header de los archivos FITS.
-    Si se proporciona un catálogo de objetos (objects_csv), intenta
-    corregir el OBJECT según la posición (RA, DEC) y sobrescribe el FITS
-    si hay cambios.
-    """
 
-    output_path = Path(night_dir, output_file)
-
-    keys = [
-        'IMAGETYP', 'CALIBZ', 'CALIBF', 'ASTROMET', 'OBJECT', 'RA', 'DEC', 'EXPTIME', 'GAIN',
-        'RDNOISE', 'FILTERS', 'DATE-OBS', 'TIME-OBS', 'MJD-OBS', 'AIRMASS',
-        'FILENAME', 'OBJ_MATCH_STATUS', 'CONTAINS_OBJECT'
-    ]
-
-    # Cargar catálogo si se proporciona
-    if objects_csv is not None:
-        objects_df = pd.read_csv(objects_csv)
-        catalog_coords = SkyCoord(
-            ra=objects_df["ra_deg"].values * u.deg,
-            dec=objects_df["dec_deg"].values * u.deg
-        )
-    else:
-        objects_df = None
-        catalog_coords = None
-
-    values = []
-
-    loaded_ds = pd.read_csv(Path(night_dir, "images_data.csv"))
-    for file in dataset["all"]:
-        file = Path(file)
-        hdr = getheader(file)
-
-        # --- Corrección del objeto si corresponde ---
-        if objects_df is not None:
-            obj_match_status = "NOT_CHECKED"
-            # Opcional: limitar solo a imágenes crudas
-            if dataset is None or file in dataset.get("images_raw", []):
-
-                ra = hdr.get("RA")
-                dec = hdr.get("DEC")
-
-                try:
-                    # RA puede venir en hh:mm:ss y DEC en grados
-                    img_coord = SkyCoord(ra=ra, dec=dec, unit=(u.hourangle, u.deg))
-                    sep = img_coord.separation(catalog_coords)
-                    min_sep = sep.min()
-                    best_idx = sep.argmin()
-
-                    if min_sep < max_sep_deg * u.deg:
-                        true_name = objects_df.iloc[best_idx]["objeto"]
-
-                        if hdr.get("OBJECT") != true_name:
-                            # Guardar objeto original
-                            hdr["ORIG_OBJ"] = hdr.get("OBJECT")
-                            hdr["OBJECT"] = true_name
-                            obj_match_status = "CORRECTED"
-
-
-                        else:
-                            obj_match_status = "OK"
-                    else:
-                        obj_match_status = "NO_MATCH"
-
-                except Exception as e:
-                    obj_match_status = "ERROR"
-            with fits.open(file, mode="update") as hdul:
-                if obj_match_status == "CORRECTED":
-                    hdul[0].header["ORIG_OBJ"] = hdr["ORIG_OBJ"]
-                    hdul[0].header["OBJECT"] = true_name
-                hdul[0].header["OBJ_MATCH_STATUS"] = obj_match_status
-                hdul.flush()
-
-        # --- Guardar metadata ---
-        row = []
-        for key in keys:
-            if objects_df is not None and key == "OBJ_MATCH_STATUS":
-                row.append(obj_match_status)
-            elif key == "FILENAME":
-                row.append(file.name)
-            else:
-                row.append(hdr.get(key))
-
-        values.append(row)
-
-    header_str = ",".join(keys)
-    np.savetxt(output_path, values, fmt="%s", delimiter=",", header=header_str)
-
-    return output_path
-'''
 
 def load_dataset_objects(night_dir, output_file):
     ds = pd.read_csv(Path(night_dir, output_file), usecols=["OBJECT"])
