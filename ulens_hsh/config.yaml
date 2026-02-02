@@ -11,7 +11,6 @@ paths:
   objects_dir: "objetos"
   objects_file: "objetos.csv"
   images_data_file: "images_data.csv"    
-  qc_images_data_file: "qc_images_data.csv"      
 
 instrument:
   gain: 2.0
