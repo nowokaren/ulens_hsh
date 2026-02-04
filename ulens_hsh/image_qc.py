@@ -369,3 +369,161 @@ def plot_qc_panel(fits_path: Path, cat_path: Path, metrics: dict, outdir: Path):
     plt.savefig(output_png, dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"✓ Guardado: {output_png}")
+    
+from astropy.wcs import WCS
+from astropy.coordinates import SkyCoord
+import astropy.units as u
+import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
+from astropy.io import fits
+from astropy.visualization import ImageNormalize, ZScaleInterval
+import pandas as pd
+import numpy as np
+from pathlib import Path
+
+def plot_qc_advanced(fits_path: Path, cat_path: Path, astrom_cat_path = None,
+                     obj_radec = None, outdir: Path = None):
+    """
+    Panel QC avanzado con:
+    - Imagen con fuentes matched (verde) y no matched (rojo)
+    - Scatter Ellipticidad vs Orientación limpio
+    - Residuales astrométricos en plot cuadrado simple
+    """
+    # ── Lectura de catálogos ─────────────────────────────────────────────
+    df = pd.read_csv(cat_path, comment="#", delim_whitespace=True, header=None)
+    column_names = [
+        "NUMBER", "X_IMAGE", "Y_IMAGE", "FLUX_AUTO", "FLUXERR_AUTO",
+        "MAG_AUTO", "MAGERR_AUTO", "FWHM_IMAGE", "ELLIPTICITY", "THETA_IMAGE",
+        "FLAGS", "SNR_WIN", "FLUX_APER_1", "FLUXERR_APER_1",
+    ]
+    df.columns = column_names[:df.shape[1]]
+
+    good = df[(df["FLAGS"] == 0) & (df["FWHM_IMAGE"] > 1)
+              & (df["SNR_WIN"] > 4)].copy()
+
+    df_astrom = None
+    if astrom_cat_path and astrom_cat_path.exists():
+        try:
+            df_astrom = pd.read_csv(astrom_cat_path)
+            if not {'RA', 'DEC'}.issubset(df_astrom.columns):
+                print("   Columnas RA / DEC no encontradas → astrometría omitida")
+                df_astrom = None
+            else:
+                print(f"   → Cargado catálogo astrométrico: {len(df_astrom)} entradas")
+        except Exception as e:
+            print(f"   Error astrom cat: {e}")
+            df_astrom = None
+
+    # ── Figura ────────────────────────────────────────────────────────────
+    fig = plt.figure(figsize=(12, 4), constrained_layout=True)
+    gs = GridSpec(1, 3, figure=fig, wspace=0.32)
+
+    # ── Imagen principal con fuentes matched y no matched ─────────────────
+    ax_img = fig.add_subplot(gs[0])
+    with fits.open(fits_path) as hdul:
+        data = hdul[0].data.astype(float).squeeze()
+        w = WCS(hdul[0].header)
+
+    norm = ImageNormalize(data, interval=ZScaleInterval())
+    ax_img.imshow(data, origin='lower', cmap='gray_r', norm=norm)
+    ax_img.set_title(f"{fits_path.stem}", fontsize=14)
+    ax_img.axis('off')
+
+    fig.colorbar(ax_img.imshow(data, origin='lower', cmap='gray_r', norm=norm),
+                 ax=ax_img, location='left', fraction=0.02, pad=0.01, shrink=0.5)
+
+    # Fuentes base (todas good) en gris tenue
+    #ax_img.scatter(good["X_IMAGE"], good["Y_IMAGE"],
+    #               s=30, facecolor='none', edgecolor='gray', lw=0.6, alpha=0.4)
+
+    if obj_radec is not None:
+        x_obj, y_obj = w.all_world2pix(obj_radec[0], obj_radec[1], 0)
+        ax_img.scatter(x_obj, y_obj,
+                           s=100, facecolor='none', edgecolor='purple', lw=2,
+                           label=f"Object")
+    # ── Astrometría: matching y marcación ────────────────────────────────
+    if df_astrom is not None:
+        ra_sex, dec_sex = w.all_pix2world(good["X_IMAGE"].values, good["Y_IMAGE"].values, 0)
+        coord_sex = SkyCoord(ra=ra_sex * u.deg, dec=dec_sex * u.deg, frame='icrs')
+        coord_ref = SkyCoord(
+            ra=df_astrom["RA"].values * u.deg,
+            dec=df_astrom["DEC"].values * u.deg,
+            frame='icrs'
+        )
+
+        idx, sep, _ = coord_sex.match_to_catalog_sky(coord_ref)
+        has_match = sep < 1.0 * u.arcsec
+
+        matched = good[has_match].copy()
+        unmatched = good[~has_match].copy()
+
+        # Marcadores para matched (verde lima)
+        if not matched.empty:
+            ax_img.scatter(matched["X_IMAGE"], matched["Y_IMAGE"],
+                           s=80, facecolor='none', edgecolor='lime', lw=1,
+                           label=f"Matched catalog ({len(matched)})")
+        
+        x_ref, y_ref = w.all_world2pix(df_astrom["RA"].values, 
+                                    df_astrom["DEC"].values, 0)
+        
+        ax_img.scatter(x_ref, y_ref,
+                s=100, facecolor='none', edgecolor='red', lw=1, alpha=0.7,
+                label=f"Cat. astro ({len(df_astrom)})")
+
+        # Marcadores para no matched (rojo, más visibles)
+        #if not unmatched.empty:
+        #    ax_img.scatter(unmatched["X_IMAGE"], unmatched["Y_IMAGE"],
+        #                   s=100, facecolor='none', edgecolor='red', lw=1, alpha=0.95,
+        #                   label=f"Sin match ({len(unmatched)})")
+
+        #ax_img.legend(loc='upper right', fontsize=10, framealpha=0.85)
+
+  
+        #ax_img.scatter(good["X_IMAGE"], good["Y_IMAGE"],
+        #                s=60, facecolor='none', edgecolor='cyan', lw=10.5,
+        #                label=f"Good  SExtractor sources ({len(good)})")
+        ax_img.legend(loc=(-0.1, -0.1), fontsize=8, ncol=2)
+
+    # ── Scatter Ellipticidad vs Orientación (mejorado) ────────────────────
+    ax_ell_theta = fig.add_subplot(gs[1])
+    ax_ell_theta.scatter(good["THETA_IMAGE"], good["ELLIPTICITY"],
+                         s=20, alpha=0.7, color='C0', edgecolor='none')
+    ax_ell_theta.set_xlabel("Orientation (°)")
+    ax_ell_theta.set_ylabel("Ellipticidad")
+    ax_ell_theta.set_xlim(-90, 90)
+    #ax_ell_theta.set_ylim(0, 1)
+    ax_ell_theta.set_title("Ellip vs orientation")
+    ax_ell_theta.grid(True, alpha=0.3, ls='--')
+
+    # ── Residuales astrométricos (plot cuadrado simple) ───────────────────
+    if df_astrom is not None and len(matched) > 0:
+        ra_diff = (coord_sex.ra - coord_ref[idx].ra).to(u.arcsec).value[has_match]
+        dec_diff = (coord_sex.dec - coord_ref[idx].dec).to(u.arcsec).value[has_match]
+
+        ax_res = fig.add_subplot(gs[2])
+        ax_res.scatter(ra_diff, dec_diff,
+                       s=25, color='C3', alpha=0.75, edgecolor='none')
+        ax_res.set_xlabel(r"$\Delta$ RA (arcsec)")
+        ax_res.set_ylabel(r"$\Delta$ DEC (arcsec)")
+        ax_res.set_title("Residuales astrométricos")
+        ax_res.grid(True, alpha=0.3, ls='--')
+
+        # Líneas guía simétricas
+        lim = 1.5
+        ax_res.axvline(0, color='gray', ls='-', lw=1, alpha=0.5)
+        ax_res.axhline(0, color='gray', ls='-', lw=1, alpha=0.5)
+        ax_res.axvline(lim, color='gray', ls='--', lw=1, alpha=0.6)
+        ax_res.axvline(-lim, color='gray', ls='--', lw=1, alpha=0.6)
+        ax_res.axhline(lim, color='gray', ls='--', lw=1, alpha=0.6)
+        ax_res.axhline(-lim, color='gray', ls='--', lw=1, alpha=0.6)
+
+        # Hacerlo cuadrado
+        ax_res.set_aspect('equal')
+        ax_res.set_xlim(-lim*1.2, lim*1.2)
+        ax_res.set_ylim(-lim*1.2, lim*1.2)
+
+    # ── Guardar ───────────────────────────────────────────────────────────
+    output_png = outdir / f"{fits_path.stem}_qc_advanced.png"
+    plt.savefig(output_png, dpi=160, bbox_inches='tight')
+    plt.close(fig)
+    print(f"✓ Guardado: {output_png}")

@@ -67,7 +67,191 @@ CATALOGS_PHOT = {
         },
 }
 
+CATALOGS_ASTRO = {
+    "Gaia": {
+        "cat": "I/355/gaiadr3",
+        "ra": "RA_ICRS",
+        "dec": "DE_ICRS",
+        "pm_ra": "pmRA",           # proper motion RA * cos(dec)
+        "pm_dec": "pmDE",
+        "parallax": "Plx",         # opcional, pero útil para distancia
+        "mag": "Gmag",             # magnitud principal para filtro
+        "mag_err": "e_Gmag",
+    },
+   # Pan-STARRS DR2 para campos profundos)
+    #"PanSTARRS": {
+    #    "cat": "II/349/ps1",
+    #    "ra": "RAJ2000",
+    #    "dec": "DEJ2000",
+    #    "mag": "rMeanPSFMag",
+    #    "mag_err": "rMeanPSFMagErr",
+    #},
+}
 
+def generate_refcat(objname, ra_center, dec_center, 
+                    img_path, objects_dir, 
+                    fov_frac=0.3, 
+                    min_mag=9, max_mag=16, 
+                    max_mag_err=0.25,
+                    use_catalogs="all", 
+                    plot=False, 
+                    type="alig", 
+                    overwrite=False):
+    """
+    Genera catálogo de referencia para alineación, fotometría o astrometría.
+    type puede ser: 'alig', 'phot' o 'astro'
+    """
+    outpath = objects_dir / objname 
+    cat_path = outpath / f"{objname}_{type}_cat.csv"
+    
+    if cat_path.exists() and not overwrite:
+        print(f"         Omitiendo: Archivo {cat_path} ya existe.")
+        return cat_path
+    elif cat_path.exists() and overwrite:
+        print(f"         Sobrescribiendo archivo {cat_path}")
+    else:
+        print(f"         Generando archivo {cat_path}...")
+
+    # Calcular radio de búsqueda basado en FOV
+    with fits.open(img_path) as hdul:
+        w_ref = WCS(hdul[0].header)
+        ny, nx = hdul[0].data.shape
+    
+    corners_pix = np.array([[0,0],[nx,0],[0,ny],[nx,ny]])
+    ra_c, dec_c = w_ref.pixel_to_world_values(corners_pix[:,0], corners_pix[:,1])
+    coord_corners = SkyCoord(ra_c*u.deg, dec_c*u.deg)
+    
+    _, _, sep2d, _ = search_around_sky(coord_corners, coord_corners, 180*u.deg)
+    fov_diag_arcmin = sep2d.max().to(u.arcmin).value
+    search_radius_arcmin = fov_diag_arcmin * fov_frac
+    
+    print(f"         FOV diagonal: {fov_diag_arcmin:.1f}' → Search radius: {search_radius_arcmin:.1f}'")
+    
+    coord = SkyCoord(ra_center*u.deg, dec_center*u.deg)
+    radius = search_radius_arcmin * u.arcmin
+
+    # Seleccionar el diccionario según el tipo
+    if type == "alig":
+        catalogs = CATALOGS_ALIG
+    elif type == "phot":
+        catalogs = CATALOGS_PHOT
+    elif type == "astro":
+        catalogs = CATALOGS_ASTRO
+
+    else:
+        raise ValueError("type debe ser 'alig', 'phot' o 'astro'")
+
+    if use_catalogs != "all":
+        catalogs = {k: v for k, v in catalogs.items() if k in use_catalogs.split(",")}
+
+    refs = []
+    for name, c in catalogs.items():
+        print(f"         Buscando en {name}...")
+
+        if type == "astro":
+            # Columnas esenciales para astrometría
+            columns = [c["ra"], c["dec"], c["mag"], c["mag_err"]]
+            if "pm_ra" in c:
+                columns += [c["pm_ra"], c["pm_dec"]]
+            if "parallax" in c:
+                columns += [c["parallax"]]
+
+            column_filters = {c["mag"]: f">{min_mag} & <{max_mag}"}
+            if c["mag_err"] in column_filters:
+                column_filters[c["mag_err"]] = f"<{max_mag_err}"
+
+        elif type == "alig":
+            columns = [c["ra"], c["dec"], c["mag"]]
+            column_filters = {c["mag"]: f">{min_mag} & <{max_mag}"}
+
+        elif type == "phot":
+            columns = [c["ra"], c["dec"]] + c.get("mag", []) + c.get("mag_err", [])
+            column_filters = {}
+            for mag_col in c.get("mag", []):
+                column_filters[mag_col] = f">{min_mag} & <{max_mag}"
+            for err_col in c.get("mag_err", []):
+                column_filters[err_col] = f"<{max_mag_err}"
+
+        try:
+            v = Vizier(columns=columns,
+                       column_filters=column_filters,
+                       row_limit=15000)  # más filas para astrometría
+            r = v.query_region(coord, radius=radius, catalog=c["cat"])
+
+            if not r or len(r[0]) == 0:
+                print(f"         • {name} → 0 refs")
+                continue
+
+            t = r[0]
+            df = t.to_pandas()
+            df = df.replace([np.inf, -np.inf], np.nan).dropna()
+
+            # Renombrar columnas estándar
+            df = df.rename(columns={
+                c["ra"]: "RA",
+                c["dec"]: "DEC",
+                c["mag"]: "mag"
+            })
+
+            # Para astrometría: agregar PM si existe
+            if type == "astro" and "pm_ra" in c:
+                df = df.rename(columns={
+                    c["pm_ra"]: "pmRA",
+                    c["pm_dec"]: "pmDE"
+                })
+
+            df["catalog"] = name
+            refs.append(df)
+            print(f"            • {name} → {len(df)} refs")
+
+        except Exception as e:
+            print(f"         Error en {name}: {e}")
+
+    if not refs:
+        raise RuntimeError("No se encontraron referencias en ningún catálogo")
+
+    df_out = pd.concat(refs, ignore_index=True)
+    df_out.to_csv(cat_path, index=False)
+
+    print(f"      ✓ Archivo {cat_path} generado correctamente ({len(df_out)} refs).")
+
+    # Plot (opcional, adaptado para astrometría)
+    if plot:
+        colors = {"Gaia": "yellow", "2MASS": "orange", "APASS": "lime",
+                  "PanSTARRS": "purple"}
+        
+        with fits.open(img_path) as hdul:
+            data = hdul[0].data
+            w = WCS(hdul[0].header)
+        
+        fig, ax = plt.subplots(1, 1, figsize=(8, 8))
+        
+        ax.imshow(data, cmap="gray",
+                    norm=simple_norm(data, "sqrt", percent=99.5),
+                    origin="lower")
+
+        for cat in np.unique(df_out["catalog"]):
+            m = df_out["catalog"].values == cat
+            x, y = w.world_to_pixel_values(df_out["RA"].astype(float),
+                                            df_out["DEC"].astype(float))
+            ax.scatter(x, y, s=140, facecolors='none',
+                        edgecolors=colors[cat], lw=2, label=cat)
+    
+        xo, yo = w.world_to_pixel_values(ra_center, dec_center)
+        ax.plot(xo, yo, 'o', ms=30, mew=2, color='cyan', fillstyle='none')
+    
+        ax.set_title(f"{objname} - Estrellas de referencia")
+        ax.legend(fontsize=8)
+        plot_path = outpath / f"{objname}_{type}_cat.png"
+        plt.tight_layout()
+        plt.savefig(plot_path)
+        plt.close(fig)
+        print(f"      ✓ Plot saved: {plot_path} ")
+
+    return cat_path
+
+    return cat_path
+"""
 def generate_refcat(objname, ra_center, dec_center, 
                     img_path, objects_dir, 
                     fov_frac=0.3, min_mag=9, max_mag=12, 
@@ -107,7 +291,10 @@ def generate_refcat(objname, ra_center, dec_center,
     
 
     refs = []
-    catalogs = CATALOGS_ALIG if type == "alig" else CATALOGS_PHOT
+    if type in ["alig", "astro"]:
+        catalogs = CATALOGS_ALIG  
+    elif type == "phot":
+        CATALOGS_PHOT
 
     if use_catalogs != "all":
         catalogs = {k: v for k, v in catalogs.items() if k in use_catalogs}
@@ -124,7 +311,11 @@ def generate_refcat(objname, ra_center, dec_center,
                 column_filters[mag_col] = mag_limit
             for err_col in c.get("mag_err", []):
                 column_filters[err_col] = f"<{max_mag_err}"   # ajusta si querés otro valor
-        
+        elif type == "astro":
+            columns = [c["ra"], c["dec"], c["mag"]]
+            column_filters = {c["mag"]: mag_limit}
+        else: 
+            raise ValueError("Invalid type. Use a valid one: 'alig', 'phot' or 'astro'")
         #try:
         v = Vizier(columns=columns,
                     column_filters=column_filters, row_limit=10000)
@@ -200,7 +391,7 @@ def generate_refcat(objname, ra_center, dec_center,
         print(f"      ✓ Plot saved: {plot_path} ")
 
     return cat_path
-
+"""
 def plot_catalog_on_image(
     fits_file,
     catalog,
