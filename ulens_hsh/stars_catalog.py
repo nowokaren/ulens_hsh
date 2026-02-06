@@ -185,13 +185,41 @@ def generate_refcat(objname, ra_center, dec_center,
             t = r[0]
             df = t.to_pandas()
             df = df.replace([np.inf, -np.inf], np.nan).dropna()
+            
+            coord_refs = SkyCoord(df[c["ra"]].values * u.deg,
+                        df[c["dec"]].values * u.deg)
+
+            sep = coord.separation(coord_refs).arcmin
+            df = df[sep > 0.5]
+            if type == "phot":
+                if use_catalogs == "Gaia3":
+                    df = gaia_to_vi(df)
+                elif use_catalogs == "Gaia_SN":
+                    df = gaia_to_bvri(df)
+            elif type == "alig":
+                df = df.rename(columns = {c["mag"]: "mag"})
+            #df = df.rename(columns = {c["ra"]:"RA", c["dec"]:"DEC"})
+
 
             # Renombrar columnas estándar
-            df = df.rename(columns={
+            # Renombrar columnas estándar
+            rename_map = {
                 c["ra"]: "RA",
-                c["dec"]: "DEC",
-                c["mag"]: "mag"
-            })
+                c["dec"]: "DEC"
+            }
+
+            if type in ["alig", "astro"]:
+                # acá mag es string
+                rename_map[c["mag"]] = "mag"
+
+            elif type == "phot":
+                # mantener todas las magnitudes con su nombre original
+                # o si querés una principal:
+                if isinstance(c.get("mag"), list) and len(c["mag"]) > 0:
+                    rename_map[c["mag"][0]] = "mag"   # usar la primera como mag principal
+
+            df = df.rename(columns=rename_map)
+
 
             # Para astrometría: agregar PM si existe
             if type == "astro" and "pm_ra" in c:

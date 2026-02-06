@@ -637,8 +637,9 @@ def plot_alignment(dataset, night_dir, objname, filter_band, obj_ra, obj_dec, ou
         alig_img  = read_fits_data(alig[i])
         scaled_img = read_fits_data(scaled[i])
 
-        vmin = np.percentile(calib_img, 5)
-        vmax = np.percentile(calib_img, 99)
+        vmin_cal, vmax_cal = np.percentile(calib_img, 5),  np.percentile(calib_img, 99)
+        vmin_ali, vmax_ali = np.percentile(alig_img, 5),   np.percentile(alig_img, 99)
+        vmin_sca, vmax_sca = np.percentile(scaled_img, 5), np.percentile(scaled_img, 99)
 
         images = [calib_img, alig_img, scaled_img]
         titles = [
@@ -647,8 +648,8 @@ def plot_alignment(dataset, night_dir, objname, filter_band, obj_ra, obj_dec, ou
             "Scaled: " + scaled[i].stem
         ]
         cmaps  = ["gray", "gray", "gray"]
-        vmins  = [vmin, vmin, vmin]
-        vmaxs  = [vmax, vmax, vmax]
+        vmins  = [vmin_cal, vmin_cal, vmin_sca]
+        vmaxs  = [vmax_cal, vmax_cal, vmax_sca]
         files_list = [calib[i], alig[i], scaled[i]]
 
         # Estadísticas
@@ -675,7 +676,7 @@ def plot_alignment(dataset, night_dir, objname, filter_band, obj_ra, obj_dec, ou
     fig.suptitle(
         f"Noche: {night_dir.name}   |   Objeto: {objname}",
         fontsize=12,
-        y=0.9
+        y=0.99
     )
 
     # ------------------------------------------------------------------

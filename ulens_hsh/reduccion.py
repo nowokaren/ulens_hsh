@@ -231,6 +231,7 @@ def flatcombine(myflats, flatcorrection, plot=True):
             master_flat[band].write(master_flat_path, overwrite=True)
             fits.setval(master_flat_path, 'IMAGETYP', value='masterflat')
             fits.setval(master_flat_path, 'FILENAME', value=master_flat_filename)
+            fits.setval(master_flat_path, 'FILTERS', value=band)
 
             del flat_filter
 
@@ -384,7 +385,7 @@ def run_reduction(dataset,
 # -----------------------------------------------------------------------------
 import pandas as pd
 def plot_reduction(dataset, night_dir, objname, output_name=None, show=False,
-                   overwrite=False):
+                   overwrite=False, per_page=30):
     """
     Genera un plot de control de calidad de la reducción:
     RAW, Bias, RAW-Bias, FlatBias, Bias-FlatBias + histogramas.
@@ -423,15 +424,15 @@ def plot_reduction(dataset, night_dir, objname, output_name=None, show=False,
     elif isinstance(dataset, str) and dataset.endswith(".csv"):
 
         ds = pd.read_csv(Path(night_dir, dataset))
-        ds_obj = ds[(ds["OBJECT"] == objname) & (ds["ASTROMET"]=="None")]
+        ds_obj = ds[(ds["OBJECT"] == objname) & (ds["ASTROMET"].isna())]
         raw_files = [
             Path(night_dir, fname)
-            for fname in ds_obj[ds_obj["CALIBZ"] == "None"]["FILENAME"]
+            for fname in ds_obj[ds_obj["CALIBZ"].isna()]["FILENAME"]
         ]
         bias_files = [
             Path(night_dir, fname)
             for fname in ds_obj[(ds_obj["CALIBZ"] == "subtracted bias")
-                                & (ds_obj["CALIBF"] == "None")]["FILENAME"]
+                                & (ds_obj["CALIBF"].isna())]["FILENAME"]
         ]
         flatbias_files = [
             Path(night_dir, fname)
@@ -460,131 +461,119 @@ def plot_reduction(dataset, night_dir, objname, output_name=None, show=False,
     MEDIAN_TOL = 5.0
     NOISE_RATIO = 0.95
     NEG_FRAC_MAX = 0.01
+    
+    n_pages = int(np.ceil(n / per_page))
 
-    # ------------------------------------------------------------------
-    # Figura
-    # ------------------------------------------------------------------
-    fig = plt.figure(figsize=(20, 5*n))
-    gs = GridSpec(
-        nrows=2*n, ncols=5,
-        height_ratios=[4, 1]*n,
-        hspace=0.35, wspace=0.15
-    )
+    saved_paths = []
 
-    for i in tqdm(range(n), desc=f"      → Plotting images"):
-        row_img  = 2*i
-        row_hist = 2*i + 1
+    for page in range(n_pages):
+        start = page * per_page
+        end   = min((page + 1) * per_page, n)
+        n_page = end - start
 
-        raw_img = read_fits_data(raw[i])
-        b_img   = read_fits_data(bias[i])
-        fb_img  = read_fits_data(flatbias[i])
+        print(f"      → Page {page+1}/{n_pages}  (images {start+1}–{end})")
 
-        diff_rb = raw_img - b_img
-        diff_bf = b_img - fb_img
+        fig = plt.figure(figsize=(20, 5 * n_page))
+        gs = GridSpec(
+            nrows=2 * n_page, ncols=5,
+            height_ratios=[4, 1] * n_page,
+            hspace=0.35, wspace=0.15
+        )
 
-        vmin_raw = np.percentile(raw_img, 5)
-        vmax_raw = np.percentile(raw_img, 99)
-        
-        vmin_b = np.percentile(b_img, 5)
-        vmax_b = np.percentile(b_img, 99)
-        
-        vmin_fb = np.percentile(fb_img, 5)
-        vmax_fb = np.percentile(fb_img, 99)
+        for local_i, i in enumerate(range(start, end)):
+            row_img  = 2 * local_i
+            row_hist = 2 * local_i + 1
 
-        dmax_rb = np.percentile(np.abs(diff_rb), 99)
-        dmax_bf = np.percentile(np.abs(diff_bf), 99)
+            raw_img = read_fits_data(raw[i])
+            b_img   = read_fits_data(bias[i])
+            fb_img  = read_fits_data(flatbias[i])
 
-        images = [raw_img, b_img, diff_rb, fb_img, diff_bf]
-        titles = [
-            "RAW: " + raw[i].stem,
-            "Bias: " + bias[i].stem,
-            "RAW − Bias",
-            "FlatBias: " + flatbias[i].stem,
-            "Bias − FlatBias"
-        ]
-        cmaps  = ["gray", "gray", "seismic", "gray", "seismic"]
-        vmins  = [vmin_raw, vmin_b, -dmax_rb, vmin_fb, -dmax_bf]
-        vmaxs  = [vmax_raw, vmax_b,  dmax_rb, vmax_fb,  dmax_bf]
+            diff_rb = raw_img - b_img
+            diff_bf = b_img - fb_img
 
-        # Estadísticas
-        s_raw = img_stats(raw_img)
-        s_rb  = img_stats(diff_rb)
+            vmin_raw = np.percentile(raw_img, 5)
+            vmax_raw = np.percentile(raw_img, 99)
+            vmin_b   = np.percentile(b_img, 5)
+            vmax_b   = np.percentile(b_img, 99)
+            vmin_fb  = np.percentile(fb_img, 5)
+            vmax_fb  = np.percentile(fb_img, 99)
 
-        flags = []
-        #if abs(s_rb["median"]) > MEDIAN_TOL:
-        #    flags.append("MED≠0")
-        if s_rb["std"] > NOISE_RATIO * s_raw["std"]:
-            flags.append("NOISE↑")
-        if s_rb["neg_frac"] > NEG_FRAC_MAX:
-            flags.append("NEG")
+            dmax_rb = np.percentile(np.abs(diff_rb), 99)
+            dmax_bf = np.percentile(np.abs(diff_bf), 99)
 
-        qc_label = "OK" if len(flags) == 0 else "QC: " + ", ".join(flags)
+            images = [raw_img, b_img, diff_rb, fb_img, diff_bf]
+            titles = [
+                "RAW: " + raw[i].stem,
+                "Bias: " + bias[i].stem,
+                "RAW − Bias",
+                "FlatBias: " + flatbias[i].stem,
+                "Bias − FlatBias"
+            ]
+            cmaps  = ["gray", "gray", "seismic", "gray", "seismic"]
+            vmins  = [vmin_raw, vmin_b, -dmax_rb, vmin_fb, -dmax_bf]
+            vmaxs  = [vmax_raw, vmax_b,  dmax_rb, vmax_fb,  dmax_bf]
 
-        for j in range(5):
+            s_raw = img_stats(raw_img)
+            s_rb  = img_stats(diff_rb)
 
-            # ---- Imagen ----
-            ax_img = fig.add_subplot(gs[row_img, j])
-            im = ax_img.imshow(images[j], origin="lower",
-                               cmap=cmaps[j], vmin=vmins[j], vmax=vmaxs[j])
-            ax_img.set_title(titles[j], fontsize=11)
-            ax_img.axis("off")
+            flags = []
+            if s_rb["std"] > NOISE_RATIO * s_raw["std"]:
+                flags.append("NOISE↑")
+            if s_rb["neg_frac"] > NEG_FRAC_MAX:
+                flags.append("NEG")
 
-            # Estadísticas
-            s = img_stats(images[j])
-            txt = (f"μ={s['mean']:.2f}  med={s['median']:.2f}  σ={s['std']:.2f}\n"
-                   f"p5={s['p5']:.1f}  p95={s['p95']:.1f}  neg={100*s['neg_frac']:.2f}%")
-            ax_img.text(0.02, -0.14, txt, transform=ax_img.transAxes,
-                        fontsize=8, color="yellow",
-                        bbox=dict(facecolor="black", alpha=0.5, pad=2))
+            qc_label = "OK" if len(flags) == 0 else "QC: " + ", ".join(flags)
 
-            # Etiqueta QC
-            if j == 2:
-                color = "lime" if qc_label == "OK" else "red"
-                ax_img.text(0.02, 0.95, qc_label, transform=ax_img.transAxes,
-                            fontsize=9, color=color, fontweight="bold",
+            for j in range(5):
+                ax_img = fig.add_subplot(gs[row_img, j])
+                im = ax_img.imshow(images[j], origin="lower",
+                                   cmap=cmaps[j], vmin=vmins[j], vmax=vmaxs[j])
+                ax_img.set_title(titles[j], fontsize=11)
+                ax_img.axis("off")
+
+                s = img_stats(images[j])
+                txt = (f"μ={s['mean']:.2f}  med={s['median']:.2f}  σ={s['std']:.2f}\n"
+                       f"p5={s['p5']:.1f}  p95={s['p95']:.1f}  neg={100*s['neg_frac']:.2f}%")
+                ax_img.text(0.02, -0.14, txt, transform=ax_img.transAxes,
+                            fontsize=8, color="yellow",
                             bbox=dict(facecolor="black", alpha=0.5, pad=2))
 
-            # Colorbar
-            cb = fig.colorbar(im, ax=ax_img, fraction=0.03, pad=0.02)
-            cb.ax.tick_params(labelsize=7)
+                if j == 2:
+                    color = "lime" if qc_label == "OK" else "red"
+                    ax_img.text(0.02, 0.95, qc_label, transform=ax_img.transAxes,
+                                fontsize=9, color=color, fontweight="bold",
+                                bbox=dict(facecolor="black", alpha=0.5, pad=2))
 
-            # ---- Histograma ----
-            ax_hist = fig.add_subplot(gs[row_hist, j])
-            data = images[j].ravel()
-            p99 = np.percentile(data, 99)
-            p1 = np.percentile(data, 1)
-            ax_hist.hist(data, bins=120, range=(p1, p99))
-            ax_hist.tick_params(labelsize=6)
-            if j == 0:
-                ax_hist.set_ylabel("N", fontsize=7)
-            ax_hist.set_xlabel("ADU", fontsize=7)
+                cb = fig.colorbar(im, ax=ax_img, fraction=0.03, pad=0.02)
+                cb.ax.tick_params(labelsize=7)
 
-            if j == 2:
-                ax_hist.set_xlim(-dmax_rb, dmax_rb)
-            if j == 4:
-                ax_hist.set_xlim(-dmax_bf, dmax_bf)
+                ax_hist = fig.add_subplot(gs[row_hist, j])
+                data = images[j].ravel()
+                p99 = np.percentile(data, 99)
+                p1  = np.percentile(data, 1)
+                ax_hist.hist(data, bins=120, range=(p1, p99))
+                ax_hist.tick_params(labelsize=6)
+                if j == 0:
+                    ax_hist.set_ylabel("N", fontsize=7)
+                ax_hist.set_xlabel("ADU", fontsize=7)
 
-    fig.subplots_adjust(top=0.94)
-    fig.suptitle(
-        f"Noche: {night_dir.name}   |   Objeto: {objname}",
-        fontsize=16,
-        y=0.9
-    )
+                if j == 2:
+                    ax_hist.set_xlim(-dmax_rb, dmax_rb)
+                if j == 4:
+                    ax_hist.set_xlim(-dmax_bf, dmax_bf)
 
-    # ------------------------------------------------------------------
-    # Guardar
-    # ------------------------------------------------------------------
-    if output_name is None:
-        output_name = f"reduction_{objname}.png"
+        fig.subplots_adjust(top=0.94)
+        fig.suptitle(
+            f"Noche: {night_dir.name} | Objeto: {objname} | Page {page+1}/{n_pages}",
+            fontsize=16, y=0.98
+        )
 
-    output_path = night_dir / output_name
-    plt.savefig(output_path, bbox_inches="tight", pad_inches=0.05, dpi=150)
-    print(f"      ✓ Plot saved as {output_path}")
-    if show:
-        plt.show()
-    else:
+        page_name = f"reduction_{objname}_page_{page+1:02d}.png"
+        page_path = night_dir / page_name
+        plt.savefig(page_path, bbox_inches="tight", pad_inches=0.05, dpi=150)
         plt.close(fig)
 
-    return output_path
+        print(f"      ✓ Saved {page_path}")
+        saved_paths.append(page_path)
 
-
+    return saved_paths

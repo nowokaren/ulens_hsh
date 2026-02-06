@@ -2,7 +2,7 @@
 # CONFIGURACIÓN DEL PIPELINE
 # =========================
 
-night: "20250823bis"
+night: "20250603"
 filters: ["I", "V"]  # filtros a procesar
 
 paths:
@@ -13,18 +13,18 @@ paths:
   images_data_file: "images_data.csv"    
 
 instrument:
-  gain: 2.0
-  rdnoise: 15.7
+  gain: 2.2
+  rdnoise: 15
 
 steps:
-  update_headers: false
+  update_headers: true
   export_metadata: true
-  reduction: false
-  astrometry: false
+  reduction: true
+  astrometry: true
   image_qc: true
-  contains_obj: false
-  combine: false
-  photometry: false
+  contains_obj: true
+  combine: true
+  photometry: true
   cleanup: false
   plots: false
 
@@ -45,7 +45,7 @@ aligment:
     max_mag: 12
     fov_frac: 0.3  # fracción del FOV para búsqueda de
     plot: true
-    overwrite: true
+    overwrite: false
 
 
 combine:
@@ -58,9 +58,9 @@ combine:
   remove_temp_files: true
 
 qc:
-  reduction_images: false
+  reduction_images: true
   aligment_images: true
-  combined_images: false
+  combined_images: files
 
   image_qc:
     enabled: true
@@ -77,12 +77,12 @@ photometry:
     max_mag: 15
     max_mag_err: 0.25
     fov_frac: 0.4  # fracción del FOV para búsqueda de fuentes
-    overwrite: true
+    overwrite: false
     min_bp_snr: 50
     min_rp_snr: 50
     min_g_snr: 100
     row_limit: -1
-  on_exp: false        # do photometry on individual exposures?
+  on_exp: true        # do photometry on individual exposures?
   on_comb: true       # do photometry on combined images?
   method: "aperture"  # "aperture" o "psf"
   autophot:

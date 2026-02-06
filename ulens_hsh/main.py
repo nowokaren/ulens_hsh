@@ -4,9 +4,10 @@ from fits_io import flag_object_in_fov, load_dataset_objects
 from reduccion import run_reduction, plot_reduction
 from astrometria import run_astrometry
 from stars_catalog import generate_refcat, plot_catalog_on_image
-from combine import process_and_combine_images, plot_combined, remove_aligment_tempfiles, plot_aligment
+from combine import process_and_combine_images, plot_combined, remove_aligment_tempfiles, plot_alignment, plot_alignment_qc
 import pandas as pd
 from pathlib import Path
+from astropy.io import fits
 import os
 from utils import load_config, Tee, load_target_coordinates, append_last_row
 from datetime import datetime
@@ -15,7 +16,9 @@ from autophot.autophot_main import run_automatic_autophot
 import tempfile
 import shutil
 from autophot.prep_input import load
-
+from image_qc import run_image_qc, plot_qc_panel,  plot_qc_advanced
+import numpy as np
+import traceback
 
 
 
@@ -35,6 +38,7 @@ night_dir = Path(data_path, night)
 objects_csv = Path(object_path, "objetos.csv")
 images_file_name = cfg["paths"]["images_data_file"]
 images_file = Path(night_dir, images_file_name)
+
 
 gain = cfg["instrument"]["gain"]
 rdnoise = cfg["instrument"]["rdnoise"]
@@ -95,6 +99,9 @@ if steps.get("reduction", False):
         flat_correction=reduction_cfg.get("flat_correction", True),
         dark_correction=reduction_cfg.get("dark_correction", False),
     )
+    dataset = scan_dataset(night_dir)
+    metadata_file = dataset_metadata(dataset, night_dir,
+                                output_file=images_file)
 else:
     reduction_result = None
     
@@ -105,15 +112,18 @@ if cfg["qc"].get("reduction_images", False):
     print("→ [QC] Generating reduction plots")
     for objname in objects:
         print(f"   → Object: {objname}")
-
-        plot_reduction(
-            dataset=images_file,
-            night_dir=night_dir,
-            objname=objname,
-            output_name=f"reduction_{objname}.png",
-            show=False,
-            overwrite=True
-        )
+        try:
+            plot_reduction(
+                dataset=str(images_file),
+                night_dir=night_dir,
+                objname=objname,
+                output_name=f"reduction_{objname}.png",
+                show=False,
+                overwrite=True
+            )
+        except Exception as e:
+            print(f"!  Couldn't plot reduction QC for object {objname}")
+            traceback.print_exc()
     print("✓ [QC] Reduction plots generated")
 
 # -------------------------------------------------------------------------
@@ -132,6 +142,7 @@ if steps.get("astrometry", False):
     dataset = scan_dataset(night_dir)
     metadata_file = dataset_metadata(dataset, night_dir,
                                     output_file=images_file)
+
 # -------------------------------------------------------------------------
 # 5.a) Images contains its object?
 # -------------------------------------------------------------------------
@@ -143,6 +154,105 @@ if steps.get("contains_obj", False):
                        overwrite=False)
     metadata_file = dataset_metadata(dataset, night_dir,
                                     output_file=images_file)
+    
+# -------------------------------------------------------------------------
+# 5.b) Sanity check: filtro de imágenes válidas
+# -------------------------------------------------------------------------
+if steps.get("image_qc", False):
+    print("→ Running image QC module")
+
+    qc_cfg = cfg["qc"]["image_qc"]
+    ds = pd.read_csv(images_file)
+    for objname in objects:
+        ra, dec = load_target_coordinates(objname, objects_csv)
+        mask = (
+            ds["CALIBZ"].str.contains("bias", case=False, na=False) &
+            (ds["ASTROMET"] == "yes") &
+            ds["CALIBF"].str.contains("flat", case=False, na=False) &
+            (ds["OBJ_IN"] == True) &
+            ds["FILENAME"].str.endswith("_wcs.fits") &
+            (ds["OBJECT"] == objname)    
+        )
+        ds_filtered = ds[mask].copy()
+
+        if ds_filtered.empty:
+            print("   No images match QC criteria.")
+        else:
+            print(f"   Processing {len(ds_filtered)} images...")
+
+        # Ensure QC columns exist
+        qc_cols = ["QC_NSRCS", "QC_FWHM", "QC_ELLIP", "QC_USE", "QC_FLAGS", "QC_DATE"]
+        for col in qc_cols:
+            if col not in ds.columns:
+                ds[col] = np.nan
+
+        approved = rejected = 0
+
+        for idx, row in ds_filtered.iterrows():
+            fits_path = night_dir / row["FILENAME"]
+            if idx == ds_filtered.iloc[0].name:
+                astro_cat_path = generate_refcat(
+                    objname=objname, ra_center=ra, dec_center=dec,
+                    img_path=fits_path, objects_dir=object_path,
+                    fov_frac=0.4,
+                    min_mag=5,
+                    max_mag=16,
+                    max_mag_err=2,
+                    use_catalogs="all",
+                    plot=True,
+                    type="astro",
+                    overwrite=True
+                )
+            print(f"   → QC on {fits_path.name}")
+
+            try:
+                metrics, use, flags = run_image_qc(fits_path, qc_cfg, night_dir)
+
+                ds.loc[idx, "QC_NSRCS"] = metrics.get("n_sources", np.nan)
+                ds.loc[idx, "QC_FWHM"]   = metrics.get("fwhm", np.nan)
+                ds.loc[idx, "QC_ELLIP"]  = metrics.get("ellipticity", np.nan)
+                ds.loc[idx, "QC_USE"]    = use
+                ds.loc[idx, "QC_FLAGS"]  = flags
+                ds.loc[idx, "QC_DATE"]   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                status = "APPROVED" if use else "REJECTED"
+                print(f"      {status} | n_src: {metrics.get('n_sources', 'N/A')}, "
+                    f"FWHM: {metrics.get('fwhm', 'N/A'):.2f}, "
+                    f"Ellip: {metrics.get('ellipticity', 'N/A'):.2f}, Flags: {flags}")
+
+                if use:
+                    approved += 1
+                else:
+                    rejected += 1
+                
+                if qc_cfg.get("plot", False):
+                    print(f"      → Plotting QC panel")
+                    plot_qc_panel(fits_path, night_dir/"qc_outputs"/f"{fits_path.stem}_cat.txt", metrics, night_dir/"qc_outputs")
+                    plot_qc_advanced(fits_path, night_dir/"qc_outputs"/f"{fits_path.stem}_cat.txt", 
+                                    astro_cat_path, (ra,dec), night_dir/"qc_outputs")
+
+                    print(f"      QC panels saved in: {night_dir / 'qc_outputs'}/*.png")
+
+            except Exception as e:
+                print(f"      Error on {fits_path.name}: {str(e)}")
+                ds.loc[idx, "QC_FLAGS"] = f"ERROR: {str(e)[:50]}..."
+                traceback.print_exc()
+                rejected += 1
+
+    ds.to_csv(images_file, index=False)
+    print("      ✓ Image QC finished")
+
+    # Summary
+    total = approved + rejected
+    rate = (approved / total * 100) if total > 0 else 0
+    print(f"\nSummary: {total} processed | {approved} approved ({rate:.1f}%) | {rejected} rejected")
+
+    if approved > 0:
+        good = ds[ds["QC_USE"] == True]
+        print(f"Median FWHM approved: {good['QC_FWHM'].median():.2f} px")
+        print(f"Median n_sources approved: {good['QC_NSRCS'].median():.0f}")
+
+
 
 # -------------------------------------------------------------------------
 # 6) Combination
@@ -192,12 +302,13 @@ if steps.get("combine", False):
                 dataset = scan_dataset(night_dir)
                 metadata_file = dataset_metadata(dataset, night_dir,
                                     output_file=images_file)
-                print("      → Plotting aligment images")
-                plot_aligment(
+                print("      → [QC] Plotting aligment images")
+                plot_alignment(
                     dataset=str(images_file),
                     night_dir=night_dir,
                     objname=objname,
                     filter_band=filt,
+                    obj_ra=ra, obj_dec=dec,
                     output_name=f"aligment_{objname}.png",
                     show=False,
                     overwrite=True
@@ -248,7 +359,7 @@ if steps.get("photometry", False):
             type="phot",
             overwrite=phot_cat_cfg.get("overwrite", False)
         )
-        print(f"      → Plotting catalog on combined image")
+        print(f"      → [QC] Plotting catalog on combined image")
         combined_im = [f for f in dataset["images_combined"] if objname in f.name][0]
         plot_catalog_on_image(fits_file=combined_im,
                         catalog=phot_cat_path,
@@ -258,12 +369,13 @@ if steps.get("photometry", False):
                         title=f"{objname} – Aligment catalog")
         
         print("   → Photometry settings")
-        image_files = []
-        if phot_cfg["on_comb"]:
-            image_files+=[f for f in dataset["images_combined"] if objname.lower() in str(f).lower()]
-        if phot_cfg["on_exp"]:
-            image_files+=[f for f in dataset["images_astro"] if objname.lower() in str(f).lower()]
+        target_lower = objname.lower()
 
+
+        image_files = [
+            f for f in img_files
+            if target_lower in fits.getval(f, 'OBJECT', default='').lower()
+        ]
         refcat_csv = os.path.join(BASE, "data", "objetos", objname, f"{objname}_phot_cat.csv")
         fits_dir = os.path.join(BASE, "data", night, objname, "phot")
         os.makedirs(fits_dir, exist_ok=True)
@@ -283,7 +395,8 @@ if steps.get("photometry", False):
 
         autophot_input["catalog"]["use_catalog"] = "custom"
         autophot_input["catalog"]["catalog_custom_fpath"] = refcat_csv
-        shutil.copy("telescope.yml", Path(wdir, "telescope.yml"))
+       # shutil.copy("telescope.yml", Path(wdir, "telescope.yml"))
+
 
         try:
             run_automatic_autophot(autophot_input)
@@ -291,10 +404,11 @@ if steps.get("photometry", False):
             print(f"         ✓ AutoPhOT completado para {objname}")
         except Exception as e:
             print(f"         Error AutoPhOT {objname}: {str(e)}")
+            traceback.print_exc()
             continue
 
         append_last_row(
-            Path(night_dir, objname, "phot_REDUCED","REDUCED.csv"),
+            Path(night_dir, objname, "phot_REDUCED","photometry.csv"),
             Path(object_path, objname, "lightcurve.csv"),
             n_rows=len(image_files)
         )

@@ -1,16 +1,15 @@
 HSH:
   INSTRUME:
     Direct CCD:
+      (3) V: V
+      (5) I: I
       AIRMASS: AIRMASS
-      FILTERS: FILTERS
       GAIN: GAIN
       I: I
-      (5) I: I
       Name: CASLEO HSH + Direct CCD
       RDNOISE: RDNOISE
       V: V
-      (3) V: V
-      filter_key_0: FILTERS
+      filter_key_0: FILTER
       pixel_scale: 0.53
   location:
     alt: 2591

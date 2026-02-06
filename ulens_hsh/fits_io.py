@@ -81,7 +81,7 @@ def scan_dataset(path="."):
     # ------------------------------------------------------------------
     # Bias
     # ------------------------------------------------------------------
-    bias = [ (p / f).resolve() for f in images.files_filtered(imagetyp='zero') ]
+    bias = [ (p / f).resolve() for f in images.files_filtered(object='bias') ]
 
     # ------------------------------------------------------------------
     # Darks
@@ -95,11 +95,8 @@ def scan_dataset(path="."):
     # ------------------------------------------------------------------
     # Flats
     # ------------------------------------------------------------------
-    flats_raw = images.files_filtered(imagetyp='flat')
-    flats_cal = images.files_filtered(imagetyp='flat', calibz='subtracted bias')
-
-    flats_raw = [ (p / f).resolve() for f in flats_raw if f not in flats_cal ]
-    flats_cal = [ (p / f).resolve() for f in flats_cal ]
+    flats_raw = images.files_filtered(object='skyflat')
+    flats_cal = images.files_filtered(object='skyflat', calibz='subtracted bias')
 
     # ------------------------------------------------------------------
     # Science images
@@ -117,15 +114,22 @@ def scan_dataset(path="."):
     # ------------------------------------------------------------------
     # Eliminar solapamientos (jerarquía: comb  astro > flat > calib > raw)
     # ------------------------------------------------------------------
-    images_raw  = [f for f in images_raw if f not in images_cal and f not in images_flat and f not in images_astro]
-    images_cal  = [f for f in images_cal if f not in images_flat and f not in images_astro]
+    images_raw  = [f for f in images_raw if f not in images_cal and f not in images_flat 
+                   and f not in images_astro and f not in flats_raw]
+    images_cal  = [f for f in images_cal if f not in images_flat and f not in images_astro
+                   and f not in flats_cal]
     images_flat = [f for f in images_flat if f not in images_astro]
+    images_astro = [f for f in images_astro if f not in images_combined]
 
     # Convertir a Path absolutos
+    flats_raw = [ (p / f).resolve() for f in flats_raw if f not in flats_cal ]
+    flats_cal = [ (p / f).resolve() for f in flats_cal ]
     images_raw   = [ (p / f).resolve() for f in images_raw ]
     images_cal   = [ (p / f).resolve() for f in images_cal ]
     images_flat  = [ (p / f).resolve() for f in images_flat ]
     images_astro = [ (p / f).resolve() for f in images_astro ]
+
+
 
     return {
         "dir": p,
@@ -168,6 +172,14 @@ def update_headers(fits_files, gain, rdnoise):
                         filter_str[-1] if filter_str[-1].isalpha() else 'NONE'
                     )
                     hdu.header['FILTERS'] = filter_letter
+                    
+                if 'FILTER' in hdu.header:
+                    filter_str = hdu.header['FILTER'].strip()
+                    filter_letter = (
+                        filter_str[-1] if filter_str[-1].isalpha() else 'NONE'
+                    )
+                    hdu.header['FILTERS'] = filter_letter
+                    
 
                 # Fecha
                 if 'MJD-OBS' in hdu.header:
@@ -205,7 +217,7 @@ def dataset_metadata(dataset, night_dir, output_file="images_data.csv",
     keys = [
         'IMAGETYP', 'CALIBZ', 'CALIBF', 'ASTROMET', 'OBJECT', 'RA', 'DEC', 'EXPTIME', 'GAIN',
         'RDNOISE', 'FILTERS', 'DATE-OBS', 'TIME-OBS', 'MJD-OBS', 'AIRMASS',
-        'FILENAME', 'OBJ_MATCH_STATUS', 'CONTAINS_OBJECT', "NCOMBINE"
+        'FILENAME', 'OBJ_MATCH_STATUS', 'OBJ_IN', "NCOMBINE"
     ]
 
     if load_changes and output_path.exists():
@@ -230,6 +242,7 @@ def dataset_metadata(dataset, night_dir, output_file="images_data.csv",
 
 
     for file in tqdm(dataset["all"], desc="   Processing FITS files"):
+
         file = Path(file)
         if file.name in loaded_filenames:
             continue
@@ -276,6 +289,7 @@ def dataset_metadata(dataset, night_dir, output_file="images_data.csv",
                 hdul.flush()
 
         # --- Guardar metadata ---
+
         row = {}
         for key in keys:
             if objects_df is not None and key == "OBJ_MATCH_STATUS":
@@ -307,7 +321,7 @@ from pathlib import Path
 
 def load_dataset_objects(night_dir, output_file):
     ds = pd.read_csv(Path(night_dir, output_file), usecols=["OBJECT"])
-    return [obj for obj in ds["OBJECT"].unique() if obj not in ["bias", "skyflat"]]
+    return [obj for obj in ds["OBJECT"].unique() if obj not in ["bias", "skyflat", "dark"]]
 
 # =============================================================================
 # Limpieza de archivos intermedios
@@ -581,7 +595,7 @@ def flag_object_in_fov(
 ):
     """
     Para cada imagen con astrometría, chequea si el objeto observado
-    cae dentro del FOV y escribe CONTAINS_OBJECT = True/False en el header.
+    cae dentro del FOV y escribe OBJ_IN = True/False en el header.
     """
 
     meta = pd.read_csv(metadata_csv)
@@ -611,7 +625,7 @@ def flag_object_in_fov(
 
             contains = object_in_fov(fits_path, ra_obj, dec_obj)
 
-            hdr["CONTAINS_OBJECT"] = (
+            hdr["OBJ_IN"] = (
                 bool(contains),
                 "Target object falls inside image FOV"
             )
@@ -619,7 +633,7 @@ def flag_object_in_fov(
 
 
             if not contains:
-                print(f"   {fits_path.name}: CONTAINS_OBJECT = {contains}")
+                print(f"   {fits_path.name}: OBJ_IN = {contains}")
         
 
-        #print(f"   {fits_path.name}: CONTAINS_OBJECT = {contains}")
+        #print(f"   {fits_path.name}: OBJ_IN = {contains}")
