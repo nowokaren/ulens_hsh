@@ -1,0 +1,17 @@
+{
+    "Alive": "False",
+    "Observing mode": "priority_stellar_event",
+    "TAP priority": "0.0\u22130.0",
+    "Interferometry candidate": "False",
+    "t0 [HJD]": "2460558.25544\u22130.00217",
+    "u0": "0.2624\u22130.00038",
+    "tE [days]": "3.8176\u22130.00623",
+    "Mag now": "0.0",
+    "Latest data": "None",
+    "Last fit": "2460569.9402369647",
+    "mop_link": "https://mop.lco.global/targets/48487/",
+    "RA": "19:45:58.937",
+    "Dec": "-07:55:29.13",
+    "l": "31.9658",
+    "b": "-15.7049"
+}

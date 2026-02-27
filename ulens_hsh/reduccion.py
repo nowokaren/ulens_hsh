@@ -198,7 +198,7 @@ def flatcombine(myflats, flatcorrection, plot=True):
             hdu = fits.open(flat_path)
             data = hdu[0].data
             m = stats.sigma_clipped_stats(data, sigma=2, maxiters=5)[0]
-            if m < 26000. or m > 50000.:
+            if m < 26000. or m > 55000.:
                 print("      REJECTED: %s"%flat, " MEAN: %0.3f"%m)
             else:
                 flat_list.append(flat)

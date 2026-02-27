@@ -278,7 +278,7 @@ def plot_qc_panel(fits_path: Path, cat_path: Path, metrics: dict, outdir: Path):
     ax_text.axis('off')
 
     text_lines = [
-        "Metrics",
+        "Metrics of non-flagged and FWHM>0 sources:",
         "─────────────────",
         f"n total:      {len(df):>6}",
         f"n good:       {len(good):>6}",

@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 from fits_io import read_fits_data, img_stats
 from matplotlib.gridspec import GridSpec
 import re
+from collections import defaultdict
 
 #Delete files from possible previous run from the list
 
@@ -566,8 +567,8 @@ def plot_alignment(dataset, night_dir, objname, filter_band, obj_ra, obj_dec, ou
         Si False y la imágen existe, no hace nada.
 
     """
-
-    output_name = f"aligment_{objname}_{filter_band}.png"
+    if output_name is None:
+        output_name = f"aligment_{objname}_{filter_band}.png"
     output_path = night_dir / output_name
     if output_path.exists() and not overwrite:
         print(f"      ✓ Plot already exists: {output_path} (overwrite=False). Skipping.")
@@ -579,10 +580,45 @@ def plot_alignment(dataset, night_dir, objname, filter_band, obj_ra, obj_dec, ou
     if isinstance(dataset, str) and dataset.endswith(".csv"):
 
         ds = pd.read_csv(Path(dataset))
-        ds_obj = ds[(ds["OBJECT"] == objname) & (ds["ASTROMET"]=="yes") & 
+        ds_obj = ds[(ds["OBJECT"] == objname) & ((ds["ASTROMET"] == "yes")|(ds["ASTROMET"] == "failure")) & 
                     (~ds["FILENAME"].str.contains("comb", na=False)) &
                     (ds["FILTERS"] == filter_band)
                     ]
+
+
+        pattern = rf'{filter_band.lower()}(\d{{4}})'
+
+        # Diccionario maestro
+        images = defaultdict(lambda: {"calib": None, "trans": None, "scaled": None})
+
+        for fname in ds_obj["FILENAME"]:
+            match = re.search(pattern, fname)
+            if not match:
+                continue
+            
+            version = match.group(1)
+            path = Path(night_dir, fname)
+
+            if fname.endswith("_wcs.fits") and not fname.endswith("_wcs_trans.fits"):
+                images[version]["calib"] = path
+
+            elif fname.endswith("_wcs_trans.fits"):
+                images[version]["trans"] = path
+
+            elif fname.endswith("_scaled.fits"):
+                images[version]["scaled"] = path
+        versions_sorted = sorted(images.keys(), key=int)
+
+        calib  = []
+        alig   = []
+        scaled = []
+
+        for v in versions_sorted:
+            calib.append(images[v]["calib"])
+            alig.append(images[v]["trans"])
+            scaled.append(images[v]["scaled"])
+
+        '''
         calib_files = [
             Path(night_dir, fname)
             for fname in ds_obj["FILENAME"] if not "trans" in fname 
@@ -602,25 +638,24 @@ def plot_alignment(dataset, night_dir, objname, filter_band, obj_ra, obj_dec, ou
             Path(night_dir, fname)
             for fname in ds_obj["FILENAME"] if fname.endswith("_scaled.fits") 
         ]
+        '''
         
     else:
         raise ValueError("dataset debe la ruta a un CSV de metadatos.")
         
         
-    calib = sorted(calib_files)
-    alig = sorted(alig_files)
-    scaled = sorted(scaled_files)
 
     if not (len(calib) == len(alig) == len(scaled)):
         print(len(calib))
         print(len(alig))
         print(len(scaled))
-        raise ValueError("La cantidad de RAW, Bias y FlatBias no coincide.")
+        raise ValueError("La cantidad de calib, aligned y scaled no coincide.")
 
     n = len(calib)
     
     if n==0:
         print(f"      No images for object {objname}")
+        return None
 
     # ------------------------------------------------------------------
     # Figura
@@ -632,7 +667,15 @@ def plot_alignment(dataset, night_dir, objname, filter_band, obj_ra, obj_dec, ou
 
     for i in tqdm(range(n), desc=f"      → Generating aligment plots"):
         row = i
+        files_list = [calib[i], alig[i], scaled[i]]
 
+        titles = [
+            f"Calibrated: {calib[i].stem}" if calib[i] else "Calibrated",
+            f"Aligned: {alig[i].stem}" if alig[i] else "Aligned",
+            f"Scaled: {scaled[i].stem}" if scaled[i] else "Scaled"
+        ]
+
+        '''
         calib_img = read_fits_data(calib[i])
         alig_img  = read_fits_data(alig[i])
         scaled_img = read_fits_data(scaled[i])
@@ -642,17 +685,11 @@ def plot_alignment(dataset, night_dir, objname, filter_band, obj_ra, obj_dec, ou
         vmin_sca, vmax_sca = np.percentile(scaled_img, 5), np.percentile(scaled_img, 99)
 
         images = [calib_img, alig_img, scaled_img]
-        titles = [
-            "Calibrated: " + calib[i].stem,
-            "Aligned: " + alig[i].stem,
-            "Scaled: " + scaled[i].stem
-        ]
-        cmaps  = ["gray", "gray", "gray"]
-        vmins  = [vmin_cal, vmin_cal, vmin_sca]
-        vmaxs  = [vmax_cal, vmax_cal, vmax_sca]
-        files_list = [calib[i], alig[i], scaled[i]]
+        '''
+
 
         # Estadísticas
+        '''
         for j in range(3):
             ax_img = fig.add_subplot(gs[row, j])
             im = ax_img.imshow(images[j], origin="lower",
@@ -672,6 +709,70 @@ def plot_alignment(dataset, night_dir, objname, filter_band, obj_ra, obj_dec, ou
             # Colorbar
             cb = fig.colorbar(im, ax=ax_img, fraction=0.03, pad=0.02)
             cb.ax.tick_params(labelsize=7)
+        '''
+        for j in range(3):
+
+            ax_img = fig.add_subplot(gs[row, j])
+
+            # ---- CASE 1: File exists ----
+            if isinstance(files_list[j], Path):
+
+                if j == 1:  # aligned panel
+                    astro_row = ds[ds["FILENAME"] == files_list[j].name]
+                    astro = astro_row["ASTROMET"].values[0] if len(astro_row) else "N/A"
+                    title = f"Aligned: {files_list[j].stem} ASTRO: {astro}"
+                else:
+                    title = titles[j]
+
+                
+
+                img = read_fits_data(files_list[j])
+
+                vmin, vmax = np.percentile(img, 5), np.percentile(img, 99)
+
+                im = ax_img.imshow(
+                    img,
+                    origin="lower",
+                    cmap="gray",
+                    vmin=vmin,
+                    vmax=vmax
+                )
+
+                ax_img.set_title(titles[j], fontsize=8)
+                ax_img.axis("off")
+
+                # Plot circle if coordinates available
+                if obj_ra is not None and obj_dec is not None:
+                    with fits.open(files_list[j]) as hdul:
+                        w = wcs.WCS(hdul[0].header)
+                        pix_x, pix_y = w.wcs_world2pix([[obj_ra, obj_dec]], 0)[0]
+                        circle = plt.Circle(
+                            (pix_x, pix_y),
+                            radius=20,
+                            color="yellow",
+                            fill=False,
+                            linewidth=1
+                        )
+                        ax_img.add_patch(circle)
+
+                cb = fig.colorbar(im, ax=ax_img, fraction=0.03, pad=0.02)
+                cb.ax.tick_params(labelsize=7)
+
+            # ---- CASE 2: Failed image ----
+            else:
+                ax_img.set_facecolor("black")
+                ax_img.text(
+                    0.5, 0.5,
+                    "IMAGE FAILED\nQuality check not passed",
+                    color="red",
+                    fontsize=10,
+                    ha="center",
+                    va="center",
+                    transform=ax_img.transAxes
+                )
+                ax_img.set_title(titles[j] + " (FAILED)", fontsize=8, color="red")
+                ax_img.axis("off")
+
 
     fig.suptitle(
         f"Noche: {night_dir.name}   |   Objeto: {objname}",
@@ -679,11 +780,12 @@ def plot_alignment(dataset, night_dir, objname, filter_band, obj_ra, obj_dec, ou
         y=0.99
     )
 
+    
     # ------------------------------------------------------------------
     # Guardar
     # ------------------------------------------------------------------
-    if output_name is None:
-        output_name = f"aligment_{objname}.png"
+
+
 
     output_path = night_dir / output_name
     plt.savefig(output_path, bbox_inches="tight", pad_inches=0.05, dpi=150)

@@ -19,6 +19,8 @@ from autophot.prep_input import load
 from image_qc import run_image_qc, plot_qc_panel,  plot_qc_advanced
 import numpy as np
 import traceback
+#import logging
+#logging.getLogger('astropy').handlers.clear()
 
 
 
@@ -36,8 +38,8 @@ object_path = Path(data_path, cfg["paths"]["objects_dir"])
 night = cfg["night"]
 night_dir = Path(data_path, night)
 objects_csv = Path(object_path, "objetos.csv")
-images_file_name = cfg["paths"]["images_data_file"]
-images_file = Path(night_dir, images_file_name)
+meta_csv_name = cfg["paths"]["images_data_file"]
+meta_csv = Path(night_dir, meta_csv_name)
 
 
 gain = cfg["instrument"]["gain"]
@@ -73,12 +75,12 @@ if steps.get("update_headers", False):
 # -------------------------------------------------------------------------
 # 3) Export metadata
 # -------------------------------------------------------------------------
-if steps.get("export_metadata", False):
-    print(f"→ Exporting metadata to {images_file}")
-    metadata_file = dataset_metadata(dataset, night_dir, output_file=images_file,
+if steps.get("export_metadata", True):
+    print(f"→ Exporting metadata to {meta_csv}")
+    meta_csv = dataset_metadata(dataset, night_dir, output_file=meta_csv,
                                          objects_csv=objects_csv)
     # Load objects list
-    objects = load_dataset_objects(night_dir, images_file)
+    objects = load_dataset_objects(night_dir, meta_csv)
     
     # Create a folder in objects dir for each object
     for objname in objects:
@@ -100,8 +102,8 @@ if steps.get("reduction", False):
         dark_correction=reduction_cfg.get("dark_correction", False),
     )
     dataset = scan_dataset(night_dir)
-    metadata_file = dataset_metadata(dataset, night_dir,
-                                output_file=images_file)
+    meta_csv = dataset_metadata(dataset, night_dir,
+                                output_file=meta_csv)
 else:
     reduction_result = None
     
@@ -114,7 +116,7 @@ if cfg["qc"].get("reduction_images", False):
         print(f"   → Object: {objname}")
         try:
             plot_reduction(
-                dataset=str(images_file),
+                dataset=str(meta_csv),
                 night_dir=night_dir,
                 objname=objname,
                 output_name=f"reduction_{objname}.png",
@@ -140,20 +142,22 @@ if steps.get("astrometry", False):
         overwrite=astro_cfg.get("overwrite", True),
     )
     dataset = scan_dataset(night_dir)
-    metadata_file = dataset_metadata(dataset, night_dir,
-                                    output_file=images_file)
+    meta_csv = dataset_metadata(dataset, night_dir,
+                                    output_file=meta_csv)
 
 # -------------------------------------------------------------------------
 # 5.a) Images contains its object?
 # -------------------------------------------------------------------------
 if steps.get("contains_obj", False):
     print("→ Flagging not contained images")
-    df = flag_object_in_fov(metadata_file,
-                       objects_csv,
-                       night_dir,
-                       overwrite=False)
-    metadata_file = dataset_metadata(dataset, night_dir,
-                                    output_file=images_file)
+    
+    flag_object_in_fov(meta_csv,
+                        objects_csv,
+                        night_dir,
+                        overwrite=False)
+    dataset = scan_dataset(night_dir)
+    meta_csv = dataset_metadata(dataset, night_dir,load_changes=False, 
+                                    output_file=meta_csv)
     
 # -------------------------------------------------------------------------
 # 5.b) Sanity check: filtro de imágenes válidas
@@ -162,7 +166,7 @@ if steps.get("image_qc", False):
     print("→ Running image QC module")
 
     qc_cfg = cfg["qc"]["image_qc"]
-    ds = pd.read_csv(images_file)
+    ds = pd.read_csv(meta_csv)
     for objname in objects:
         ra, dec = load_target_coordinates(objname, objects_csv)
         mask = (
@@ -217,7 +221,8 @@ if steps.get("image_qc", False):
 
                 status = "APPROVED" if use else "REJECTED"
                 print(f"      {status} | n_src: {metrics.get('n_sources', 'N/A')}, "
-                    f"FWHM: {metrics.get('fwhm', 'N/A'):.2f}, "
+                    f"FWHM: {metrics.get('fwhm', 'N/A'):.2f} pix, "
+                    f"Seeing: {0.53*metrics.get('fwhm', 'N/A'):.2f} arcsec, "
                     f"Ellip: {metrics.get('ellipticity', 'N/A'):.2f}, Flags: {flags}")
 
                 if use:
@@ -238,8 +243,8 @@ if steps.get("image_qc", False):
                 ds.loc[idx, "QC_FLAGS"] = f"ERROR: {str(e)[:50]}..."
                 traceback.print_exc()
                 rejected += 1
-
-    ds.to_csv(images_file, index=False)
+    print(ds.columns)
+    ds.to_csv(meta_csv, index=False)
     print("      ✓ Image QC finished")
 
     # Summary
@@ -251,7 +256,6 @@ if steps.get("image_qc", False):
         good = ds[ds["QC_USE"] == True]
         print(f"Median FWHM approved: {good['QC_FWHM'].median():.2f} px")
         print(f"Median n_sources approved: {good['QC_NSRCS'].median():.0f}")
-
 
 
 # -------------------------------------------------------------------------
@@ -268,7 +272,7 @@ if steps.get("combine", False):
         ra, dec = load_target_coordinates(objname, objects_csv)
         alig_cfg = cfg.get("aligment", {})["catalog"]
         # Load image path for the object
-        ds = pd.read_csv(Path(night_dir, images_file))
+        ds = pd.read_csv(Path(night_dir, meta_csv))
         img_files = ds[(ds["OBJECT"]==objname)&(ds["ASTROMET"]=="yes")]["FILENAME"].values
         img_path = night_dir / img_files[0]
 
@@ -300,11 +304,11 @@ if steps.get("combine", False):
                                   title=f"{objname} – Aligment catalog")
             if cfg["qc"].get("aligment_images", False):
                 dataset = scan_dataset(night_dir)
-                metadata_file = dataset_metadata(dataset, night_dir,
-                                    output_file=images_file)
+                meta_csv = dataset_metadata(dataset, night_dir,
+                                    output_file=meta_csv)
                 print("      → [QC] Plotting aligment images")
                 plot_alignment(
-                    dataset=str(images_file),
+                    dataset=str(meta_csv),
                     night_dir=night_dir,
                     objname=objname,
                     filter_band=filt,
@@ -317,8 +321,8 @@ if steps.get("combine", False):
                 print("      → Removing temporary files")
                 removed = remove_aligment_tempfiles(filt, night_dir)
     dataset = scan_dataset(night_dir)
-    metadata_file = dataset_metadata(dataset, night_dir,
-                                    output_file=images_file)
+    meta_csv = dataset_metadata(dataset, night_dir,
+                                    output_file=meta_csv)
     
 
 if cfg["qc"].get("combined_images", False):
@@ -352,7 +356,7 @@ if steps.get("photometry", False):
             img_path=img_path, objects_dir=object_path,
             fov_frac=phot_cat_cfg.get("fov_frac", 0.3),
             min_mag=phot_cat_cfg.get("min_mag", 9),
-            max_mag=phot_cat_cfg.get("max_mag", 12),
+            max_mag=phot_cat_cfg.get("max_mag", 17),
             max_mag_err=phot_cat_cfg.get("max_mag_err", 0.25),
             use_catalogs=phot_cat_cfg.get("use_catalogs", False),
             plot=phot_cat_cfg.get("plot", False),
@@ -395,16 +399,21 @@ if steps.get("photometry", False):
 
         autophot_input["catalog"]["use_catalog"] = "custom"
         autophot_input["catalog"]["catalog_custom_fpath"] = refcat_csv
-       # shutil.copy("telescope.yml", Path(wdir, "telescope.yml"))
+        #shutil.copy("telescope.yml", Path(wdir, "telescope.yml"))
+       
+        #autophot_input['sat_lvl'] = 70000 # saturation level
 
 
         try:
             run_automatic_autophot(autophot_input)
             os.chdir(BASE)
             print(f"         ✓ AutoPhOT completado para {objname}")
+
         except Exception as e:
-            print(f"         Error AutoPhOT {objname}: {str(e)}")
-            traceback.print_exc()
+            print(f"\n         ✗ AutoPhOT FAILED for {objname}")
+            print(f"         Reason: {repr(e)}")
+            
+            os.chdir(BASE)
             continue
 
         append_last_row(
@@ -415,5 +424,5 @@ if steps.get("photometry", False):
         
         # Delete calibrated intermediate science images ? bias, flats
         # Delete duplicated images copied to run photometry?
- 
+
 print("✓ Pipeline finished successfully")

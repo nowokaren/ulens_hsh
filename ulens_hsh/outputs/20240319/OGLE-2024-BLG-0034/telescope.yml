@@ -5,12 +5,14 @@ HSH:
       (5) I: I
       AIRMASS: AIRMASS
       GAIN: GAIN
-      Name: HSH+Direct CCD
-      RDNOISE: null
+      I: I
+      Name: CASLEO HSH + Direct CCD
+      RDNOISE: RDNOISE
+      V: V
       filter_key_0: FILTER
-      pixel_scale: 0.4
+      pixel_scale: 0.53
   location:
-    alt: null
-    lat: null
-    lon: null
-    name: null
+    alt: 2591
+    lat: -31.787333333333336
+    lon: -69.30663888888888
+    name: CASLEO

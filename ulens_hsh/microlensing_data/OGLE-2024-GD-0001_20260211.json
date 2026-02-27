@@ -1,0 +1,17 @@
+{
+    "Alive": "False",
+    "Observing mode": "None",
+    "TAP priority": "3.78665\u22130.3998",
+    "Interferometry candidate": "False",
+    "t0 [HJD]": "2460391.47023\u22132.3999",
+    "u0": "1.7922\u22130.01843",
+    "tE [days]": "47.23064\u22132.80302",
+    "Mag now": "16.29385921784262",
+    "Latest data": "2025-04-09 04:58:27",
+    "Last fit": "2460494.3685710775",
+    "mop_link": "https://mop.lco.global/targets/42791/",
+    "RA": "16:47:10.740",
+    "Dec": "-39:53:57.00",
+    "l": "344.1045",
+    "b": "3.4301"
+}

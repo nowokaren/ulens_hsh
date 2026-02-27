@@ -74,46 +74,59 @@ def apply_astrometry(input_fits, output_path, api_key="wuupmjpswkcbncws"):
         time.sleep(4)
         status = requests.get(f"http://nova.astrometry.net/api/jobs/{jobid}").json().get("status")
     if status != "success":
-        raise RuntimeError(f"Astrometry.net no pudo resolver la imagen (status={status})")
-    print(f"   [Astrometry.net] Solución WCS obtenida!")
+        if status == "failure":
+            print(f"Astrometry.net no pudo resolver la imagen (status={status})")
+            with fits.open(input_fits, mode="readonly") as orig_hdu:
+                data = orig_hdu[0].data
+                orig_hdr = orig_hdu[0].header.copy()
+            orig_hdr['ASTROMET'] = (status, 'Astrometric solution applied')
+        else:
+            raise RuntimeError(f"Astrometry.net no pudo resolver la imagen (status={status})")
+            
+    else:
+        print(f"   [Astrometry.net] Solución WCS obtenida!")
 
-    # ------------------ DESCARGAR HEADER WCS ------------------
-    wcs_url = f"http://nova.astrometry.net/wcs_file/{jobid}"
-    print(f"   [Astrometry.net] Descargando solución WCS...")
-    wcs_raw = requests.get(wcs_url).content
+        # ------------------ DESCARGAR HEADER WCS ------------------
+        wcs_url = f"http://nova.astrometry.net/wcs_file/{jobid}"
+        print(f"   [Astrometry.net] Descargando solución WCS...")
+        wcs_raw = requests.get(wcs_url).content
 
-    tmp_wcs = input_fits.with_name(input_fits.stem + "_tmp_wcs.fit")
-    with open(tmp_wcs, "wb") as f:
-        f.write(wcs_raw)
+        tmp_wcs = input_fits.with_name(input_fits.stem + "_tmp_wcs.fit")
+        with open(tmp_wcs, "wb") as f:
+            f.write(wcs_raw)
 
     # ------------------ APLICAR HEADER WCS ------------------
-    print(f"   [Astrometry.net] Combinando WCS con la imagen original...")
+        print(f"   [Astrometry.net] Combinando WCS con la imagen original...")
 
-    # Abrir la imagen original
-    with fits.open(input_fits, mode="readonly") as orig_hdu:
-        data = orig_hdu[0].data
-        orig_hdr = orig_hdu[0].header.copy()
+        # Abrir la imagen original
+        with fits.open(input_fits, mode="readonly") as orig_hdu:
+            data = orig_hdu[0].data
+            orig_hdr = orig_hdu[0].header.copy()
 
-    # Abrir la solución WCS
-    with fits.open(tmp_wcs) as wcs_hdu:
-        wcs_hdr = wcs_hdu[0].header
+        # Abrir la solución WCS
+        with fits.open(tmp_wcs) as wcs_hdu:
+            wcs_hdr = wcs_hdu[0].header
 
-    # Definir los keywords críticos
-    critical_keys = [
-        "CRPIX1","CRPIX2",
-        "CRVAL1","CRVAL2",
-        "CTYPE1","CTYPE2",
-        "CUNIT1","CUNIT2",
-        "CD1_1","CD1_2","CD2_1","CD2_2",
-        "PC1_1","PC1_2","PC2_1","PC2_2",
-        "EQUINOX"
-    ]
+        # Definir los keywords críticos
+        critical_keys = [
+            "CRPIX1","CRPIX2",
+            "CRVAL1","CRVAL2",
+            "CTYPE1","CTYPE2",
+            "CUNIT1","CUNIT2",
+            "CD1_1","CD1_2","CD2_1","CD2_2",
+            "PC1_1","PC1_2","PC2_1","PC2_2",
+            "EQUINOX"
+        ]
 
-    # Copiar solo los keywords críticos al header original
-    for key in critical_keys:
-        if key in wcs_hdr:
-            orig_hdr[key] = wcs_hdr[key]
-    orig_hdr['ASTROMET'] = ('yes', 'Astrometric solution applied')
+        # Copiar solo los keywords críticos al header original
+        for key in critical_keys:
+            if key in wcs_hdr:
+                orig_hdr[key] = wcs_hdr[key]
+        orig_hdr['ASTROMET'] = ('yes', 'Astrometric solution applied')
+        
+        # Limpiar archivo temporal
+        if tmp_wcs.exists():
+            tmp_wcs.unlink()
 
     # Guardar la imagen final
     output_fits = output_path / f"{input_fits.stem}_wcs.fits"
@@ -121,9 +134,6 @@ def apply_astrometry(input_fits, output_path, api_key="wuupmjpswkcbncws"):
 
     print(f"   [Astrometry.net] Imagen final guardada en: {output_fits}")
 
-    # Limpiar archivo temporal
-    if tmp_wcs.exists():
-        tmp_wcs.unlink()
 
 
     return output_fits
@@ -147,13 +157,13 @@ def run_astrometry(dataset, output_dir, api_key, overwrite=True):
         out = output_dir / f"{img.stem}_wcs.fits"
 
         if out.exists() and not overwrite:
-            print(f"   → Skipping existing {out.name}")
-            continue
-
-        try:
-            result = apply_astrometry(img, output_dir, api_key)
-            results.append(result)
-        except Exception as e:
-            print(f"   → Failed on {img.name}: {e}")
+            print(f"   → Skipping existing {out}")
+        else:    
+            print(f"   → Processing {out}...")
+            try:
+                result = apply_astrometry(img, output_dir, api_key)
+                results.append(result)
+            except Exception as e:
+                print(f"   → Failed on {img.name}: {e}")
 
     return results

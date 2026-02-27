@@ -30,6 +30,7 @@ from tqdm.auto import tqdm
 import astropy.units as u
 
 
+
 # =============================================================================
 # Utilidades básicas
 # =============================================================================
@@ -107,6 +108,7 @@ def scan_dataset(path="."):
 
     # Imágenes con astrometría aplicada (ASTROMET = 'yes')
     images_astro = images.files_filtered(imagetyp='object', astromet='yes')
+    images_astro_failed = images.files_filtered(imagetyp='object', astromet='failure')
     
     # Imágenes combinadas (NCOMBINE presente)
     images_combined = images.files_filtered(imagetyp='object', ncombine='*')
@@ -118,7 +120,7 @@ def scan_dataset(path="."):
                    and f not in images_astro and f not in flats_raw]
     images_cal  = [f for f in images_cal if f not in images_flat and f not in images_astro
                    and f not in flats_cal]
-    images_flat = [f for f in images_flat if f not in images_astro]
+    images_flat = [f for f in images_flat if f not in images_astro and f not in images_astro_failed]
     images_astro = [f for f in images_astro if f not in images_combined]
 
     # Convertir a Path absolutos
@@ -217,7 +219,7 @@ def dataset_metadata(dataset, night_dir, output_file="images_data.csv",
     keys = [
         'IMAGETYP', 'CALIBZ', 'CALIBF', 'ASTROMET', 'OBJECT', 'RA', 'DEC', 'EXPTIME', 'GAIN',
         'RDNOISE', 'FILTERS', 'DATE-OBS', 'TIME-OBS', 'MJD-OBS', 'AIRMASS',
-        'FILENAME', 'OBJ_MATCH_STATUS', 'OBJ_IN', "NCOMBINE"
+        'FILENAME', 'OBJ_STAT', 'OBJ_IN', "NCOMBINE"
     ]
 
     if load_changes and output_path.exists():
@@ -285,14 +287,14 @@ def dataset_metadata(dataset, night_dir, output_file="images_data.csv",
                 if obj_match_status == "CORRECTED":
                     hdul[0].header["ORIG_OBJ"] = hdr["ORIG_OBJ"]
                     hdul[0].header["OBJECT"] = true_name
-                hdul[0].header["OBJ_MATCH_STATUS"] = obj_match_status
+                hdul[0].header["OBJ_STAT"] = obj_match_status
                 hdul.flush()
 
         # --- Guardar metadata ---
 
         row = {}
         for key in keys:
-            if objects_df is not None and key == "OBJ_MATCH_STATUS":
+            if objects_df is not None and key == "OBJ_STAT":
                 row[key] = obj_match_status
             elif key == "FILENAME":
                 row[key] = file.name
@@ -303,19 +305,25 @@ def dataset_metadata(dataset, night_dir, output_file="images_data.csv",
     #header_str = ",".join(keys)
     #np.savetxt(output_path, values, fmt="%s", delimiter=",", header=header_str)
 
-    df_final = pd.DataFrame(values, columns=keys)
-    df_final.to_csv(output_path, index=False)
+    df_new = pd.DataFrame(values, columns=keys)
 
-    return output_path
+    # Si ya existe el CSV, preservar columnas extra (ej: QC_*)
+    if output_path.exists():
+        df_existing = pd.read_csv(output_path)
 
+        extra_cols = [c for c in df_existing.columns if c not in keys]
 
-from astropy.io.fits import getheader
-from astropy.io import fits
-from astropy.coordinates import SkyCoord
-import astropy.units as u
-import numpy as np
-import pandas as pd
-from pathlib import Path
+        if extra_cols:
+            df_new = df_new.merge(
+                df_existing[["FILENAME"] + extra_cols],
+                on="FILENAME",
+                how="left"
+            )
+
+    df_new.to_csv(output_path, index=False)
+
+    return output_path  
+
 
 
 
@@ -608,14 +616,16 @@ def flag_object_in_fov(
         for _, row in objects.iterrows()
     }
 
-    for _, row in tqdm(meta.iterrows(), desc="Flagging objects in FOV"):
+    for _, row in tqdm(meta.iterrows(), total=len(meta), desc="Flagging objects in FOV"):
 
         objname = row["OBJECT"]
+        filename = row["FILENAME"]
         if objname not in obj_coords:
+            print(f"Object = '{objname}' not found in catalog. (image={filename}")
             continue
 
         ra_obj, dec_obj = obj_coords[objname]
-        fits_path = night_dir / row["FILENAME"]
+        fits_path = night_dir / filename
 
         if not fits_path.exists():
             continue

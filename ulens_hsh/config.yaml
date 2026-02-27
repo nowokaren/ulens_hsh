@@ -2,7 +2,7 @@
 # CONFIGURACIÓN DEL PIPELINE
 # =========================
 
-night: "20250603"
+night: "20250616"
 filters: ["I", "V"]  # filtros a procesar
 
 paths:
@@ -19,11 +19,11 @@ instrument:
 steps:
   update_headers: true
   export_metadata: true
-  reduction: true
-  astrometry: true
-  image_qc: true
+  reduction: false
+  astrometry: false
   contains_obj: true
-  combine: true
+  image_qc: false
+  combine: false
   photometry: true
   cleanup: false
   plots: false
@@ -42,7 +42,7 @@ aligment:
   catalog:
     use_catalogs: "all"  # "all" o lista de catálogos
     min_mag: 9
-    max_mag: 12
+    max_mag: 17
     fov_frac: 0.3  # fracción del FOV para búsqueda de
     plot: true
     overwrite: false
@@ -58,9 +58,9 @@ combine:
   remove_temp_files: true
 
 qc:
-  reduction_images: true
-  aligment_images: true
-  combined_images: files
+  reduction_images: false
+  aligment_images: false
+  combined_images: true
 
   image_qc:
     enabled: true
@@ -74,10 +74,10 @@ photometry:
   catalog:
     use_catalogs: "Gaia3"  # "Gaia3" or "Gaia_SN"
     min_mag: 9
-    max_mag: 15
+    max_mag: 17
     max_mag_err: 0.25
     fov_frac: 0.4  # fracción del FOV para búsqueda de fuentes
-    overwrite: false
+    overwrite: true
     min_bp_snr: 50
     min_rp_snr: 50
     min_g_snr: 100
@@ -149,7 +149,7 @@ photometry:
       max_catalog_sources: 300
     cosmic_rays:
       remove_cmrays: true
-      use_lacosmic: false
+      use_lacosmic: true
     fitting:
       fitting_method: least_squares
       use_moffat: false
