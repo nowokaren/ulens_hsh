@@ -675,41 +675,6 @@ def plot_alignment(dataset, night_dir, objname, filter_band, obj_ra, obj_dec, ou
             f"Scaled: {scaled[i].stem}" if scaled[i] else "Scaled"
         ]
 
-        '''
-        calib_img = read_fits_data(calib[i])
-        alig_img  = read_fits_data(alig[i])
-        scaled_img = read_fits_data(scaled[i])
-
-        vmin_cal, vmax_cal = np.percentile(calib_img, 5),  np.percentile(calib_img, 99)
-        vmin_ali, vmax_ali = np.percentile(alig_img, 5),   np.percentile(alig_img, 99)
-        vmin_sca, vmax_sca = np.percentile(scaled_img, 5), np.percentile(scaled_img, 99)
-
-        images = [calib_img, alig_img, scaled_img]
-        '''
-
-
-        # Estadísticas
-        '''
-        for j in range(3):
-            ax_img = fig.add_subplot(gs[row, j])
-            im = ax_img.imshow(images[j], origin="lower",
-                               cmap=cmaps[j], vmin=vmins[j], vmax=vmaxs[j])
-            ax_img.set_title(titles[j], fontsize=8)
-            ax_img.axis("off")
-
-            # Plot circle on object if coordinates available
-            if obj_ra is not None and obj_dec is not None:
-                with fits.open(files_list[j]) as hdul:
-                    w = wcs.WCS(hdul[0].header)
-                    pix_x, pix_y = w.wcs_world2pix([[obj_ra, obj_dec]], 0)[0]
-                    circle = plt.Circle((pix_x, pix_y), radius=20, 
-                                       color='yellow', fill=False, linewidth=1)
-                    ax_img.add_patch(circle)
-
-            # Colorbar
-            cb = fig.colorbar(im, ax=ax_img, fraction=0.03, pad=0.02)
-            cb.ax.tick_params(labelsize=7)
-        '''
         for j in range(3):
 
             ax_img = fig.add_subplot(gs[row, j])
@@ -723,8 +688,6 @@ def plot_alignment(dataset, night_dir, objname, filter_band, obj_ra, obj_dec, ou
                     title = f"Aligned: {files_list[j].stem} ASTRO: {astro}"
                 else:
                     title = titles[j]
-
-                
 
                 img = read_fits_data(files_list[j])
 
@@ -779,13 +742,6 @@ def plot_alignment(dataset, night_dir, objname, filter_band, obj_ra, obj_dec, ou
         fontsize=12,
         y=0.99
     )
-
-    
-    # ------------------------------------------------------------------
-    # Guardar
-    # ------------------------------------------------------------------
-
-
 
     output_path = night_dir / output_name
     plt.savefig(output_path, bbox_inches="tight", pad_inches=0.05, dpi=150)
