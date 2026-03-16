@@ -19,11 +19,11 @@ instrument:
 steps:
   update_headers: true
   export_metadata: true
-  reduction: true
-  astrometry: true
-  contains_obj: true
-  image_qc: true
-  combine: true
+  reduction: false
+  astrometry: false
+  contains_obj: false
+  image_qc: false
+  combine: false
   photometry: true
   cleanup: false
   plots: false
@@ -58,7 +58,7 @@ combine:
   remove_temp_files: true
 
 qc:
-  reduction_images: true
+  reduction_images: false
   aligment_images: true
   combined_images: true
 
@@ -84,7 +84,7 @@ photometry:
     row_limit: -1
   on_exp: true        # do photometry on individual exposures?
   on_comb: true       # do photometry on combined images?
-  method: "aperture"  # "aperture" o "psf"
+  method: "psf"  # "aperture" o "psf"
   autophot:
     fits_dir: null
     method: sp
@@ -149,7 +149,7 @@ photometry:
       max_catalog_sources: 300
     cosmic_rays:
       remove_cmrays: true
-      use_lacosmic: true
+      use_lacosmic: false
     fitting:
       fitting_method: least_squares
       use_moffat: false
@@ -159,22 +159,22 @@ photometry:
       remove_bkg_local: false
       remove_bkg_poly: false
       remove_bkg_poly_degree: 1
-      fitting_radius: 1.5
+      fitting_radius: 2.2               # PARAMETRO
     extinction:
       apply_airmass_extinction: false
     source_detection:
-      threshold_value: 25
+      threshold_value: 10                # PARAMETRO
       lim_threshold_value: 5
       fudge_factor: 5
       fine_fudge_factor: 0.1
       fwhm_guess: 7
-      isolate_sources_fwhm_sep: 5
+      isolate_sources_fwhm_sep: 4        # PARAMETRO
       init_iso_scale: 15
       sigmaclip_FWHM_sigma: 3
       sigmaclip_median_sigma: 3
       image_analysis: false
       remove_sat: true
-      pix_bound: 25
+      pix_bound: 35
       save_FWHM_plot: false
       min_source_lim: 2
       max_source_lim: 300
@@ -214,11 +214,11 @@ photometry:
       adjust_SN_loc: true
       save_target_plot: true
     psf:
-      psf_source_no: 10
+      psf_source_no: 15                     # PARAMETRO
       min_psf_source_no: 3
       plot_PSF_residuals: false
       plot_PSF_model_residuals: false
-      construction_SNR: 25
+      construction_SNR: 20                  # PARAMETRO
       regrid_size: 10
       save_PSF_models_fits: true
       save_PSF_stars: false
@@ -250,5 +250,3 @@ photometry:
       zp_use_WA: false
       zp_use_max_bin: false
       matching_source_SNR_limit: 25
-
-       
