@@ -38,6 +38,29 @@ def load_config(config_file):
     with open(config_file, "r") as f:
         return yaml.safe_load(f)
 
+import shutil
+from pathlib import Path
+
+def version_config_file(config_file, night_dir):
+    config_file = Path(config_file)
+    night_dir = Path(night_dir)
+
+    base = config_file.stem
+
+    existing = sorted(night_dir.glob(f"{base}_v*.yaml"))
+
+    if not existing:
+        version = 1
+    else:
+        nums = [int(f.stem.split("_v")[-1]) for f in existing]
+        version = max(nums) + 1
+
+    new_name = f"{base}_v{version}.yaml"
+    dest = night_dir / new_name
+
+    shutil.copy(config_file, dest)
+
+    return new_name
     
 
 class Tee:
@@ -57,7 +80,7 @@ class Tee:
         self.file.flush()
 
 
-
+'''
 def append_last_row(
     csv_origen,
     csv_destino,
@@ -83,6 +106,51 @@ def append_last_row(
     else:
         df_out = last_row.copy()
     df_out.to_csv(csv_destino, index=False)
+    return df_out
+'''
+
+def append_last_row(
+    csv_origen,
+    csv_destino,
+    n_rows=1,
+    config_version=None
+):
+
+    csv_origen = Path(csv_origen)
+    csv_destino = Path(csv_destino)
+
+    df_src = pd.read_csv(csv_origen)
+
+    if df_src.empty:
+        raise ValueError("El CSV origen está vacío")
+
+    last_row = df_src.tail(n_rows).copy()
+
+    if config_version is not None:
+        last_row["CONFIG_FILE"] = config_version
+
+    if csv_destino.exists():
+
+        df_dst = pd.read_csv(csv_destino)
+
+        # si la columna no existe la creamos
+        if "CONFIG_FILE" not in df_dst.columns:
+            df_dst["CONFIG_FILE"] = None
+
+        all_cols = sorted(set(df_dst.columns) | set(last_row.columns))
+
+        df_dst = df_dst.reindex(columns=all_cols)
+        last_row = last_row.reindex(columns=all_cols)
+
+        df_out = pd.concat([df_dst, last_row], ignore_index=True)
+
+    else:
+        if "CONFIG_FILE" not in last_row.columns:
+            last_row["CONFIG_FILE"] = config_version
+        df_out = last_row.copy()
+
+    df_out.to_csv(csv_destino, index=False)
+
     return df_out
 
 

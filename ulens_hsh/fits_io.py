@@ -112,7 +112,7 @@ def scan_dataset(path="."):
     
     # Imágenes combinadas (NCOMBINE presente)
     images_combined = images.files_filtered(imagetyp='object', ncombine='*')
-    images_combined = [ (p / f).resolve() for f in images_combined ]
+
     # ------------------------------------------------------------------
     # Eliminar solapamientos (jerarquía: comb  astro > flat > calib > raw)
     # ------------------------------------------------------------------
@@ -121,9 +121,10 @@ def scan_dataset(path="."):
     images_cal  = [f for f in images_cal if f not in images_flat and f not in images_astro
                    and f not in flats_cal]
     images_flat = [f for f in images_flat if f not in images_astro and f not in images_astro_failed]
-    images_astro = [f for f in images_astro if f not in images_combined]
+    images_astro = [f for f in images_astro if f not in images_combined and f not in images_astro_failed]
 
     # Convertir a Path absolutos
+    images_combined = [ (p / f).resolve() for f in images_combined ]
     flats_raw = [ (p / f).resolve() for f in flats_raw if f not in flats_cal ]
     flats_cal = [ (p / f).resolve() for f in flats_cal ]
     images_raw   = [ (p / f).resolve() for f in images_raw ]
@@ -145,6 +146,7 @@ def scan_dataset(path="."):
         "images_cal": images_cal,
         "images_flat": images_flat,
         "images_astro": images_astro,
+        "images_astro_failed": images_astro_failed,
         "images_combined": images_combined
     }
 
