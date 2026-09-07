@@ -2,7 +2,7 @@
 # CONFIGURACIÓN DEL PIPELINE
 # =========================
 
-night: "20250620"
+night: "testnight"
 filters: ["I", "V"]  # filtros a procesar
 
 paths:
@@ -17,21 +17,32 @@ instrument:
   rdnoise: 15
 
 steps:
-  update_headers: true
-  export_metadata: true
-  reduction: false
-  astrometry: false
-  contains_obj: false
-  image_qc: false
-  combine: false
-  photometry: true
-  cleanup: false
-  plots: false
+  update_headers:      true
+  reduction:           1
+  cosmic_ray_cleaning: 0 # esta dejando mucho puntos negros
+  astrometry:          0
+  contains_obj:        0
+  image_qc:            0
+  combine:             0
+  photometry:          0
+  cleanup:             0
+  plots:               0
 
 reduction:
   zero_correction: true
   flat_correction: true
-  dark_correction: false   # aún no implementado
+  dark_correction: true   # aún no implementado
+  scale_dark: true        # escalar darks al tiempo de exposición del objeto
+
+cosmic_rays:          # L.A.Cosmic parameters (astroscrappy)
+  sigclip: 8 #4.5        # Detection threshold [sigma above background Lower = more aggressive (more false positives) Higher = more conservative (may miss faint CRs) Recommended: 4.0-5.0 
+  sigfrac: 0.7 #0.3        # Fractional detection limit for neighboring pixelsLower = detect smaller CRs Higher = only detect isolated CRs Recommended: 0.2-0.5
+  objlim: 15 #5.0         # Contrast limit between CR and underlying object Higher = better at preserving real source Lower = may flag sharp stars as CRs Recommended: 3.0-6.0
+  niter: 1 #4            # Number of iterations More iterations = cleaner result but slower Recommended: 3-5
+  readnoise: 8.0     # CCD read noise [e-] Should match your instrument value
+  satlevel: 60000     # Saturation level [ADU] Pixels above this are masked
+  overwrite: 1    # Re-clean already processed images?
+
 
 astrometry:
   method: "astrometrynet"
@@ -46,6 +57,7 @@ aligment:
     fov_frac: 0.3  # fracción del FOV para búsqueda de
     plot: true
     overwrite: false
+  
 
 
 combine:
@@ -56,17 +68,36 @@ combine:
   sigma_low: 3.0             # para "sigma"
   sigma_high: 3.0            # para "sigma"
   remove_temp_files: true
+  remove_bkg: false
 
 qc:
-  reduction_images: false
-  aligment_images: true
+  reduction_images: 1
+  alignment_images: true
   combined_images: true
 
   image_qc:
     enabled: true
-    plot: true   # aún no implementamos plots en el módulo nuevo
-    min_sources: 50     # mínimo de estrellas buenas
-    max_fwhm: 8.0       # seeing máximo aceptable (pixeles)
+    plot: true
+    measure_bkg_gradient: true
+    min_sources:             100
+    min_fwhm:                2.5   # ~1.3"  (mínimo Nyquist)
+    max_fwhm:                12.0  # ~6.4"  (seeing razonable)
+    std_max_fwhm:            0.3   # <10% variación espacial → PSF estable
+    max_ellipticity:         0.5
+    std_max_ellip:            0.3
+    max_ellip_for_trailing:  0.5
+    max_theta_concentration: 0.85
+    max_bkg_gradient:        0.1
+    sex_cfg:
+      DETECT_THRESH:    2.5
+      DETECT_MINAREA:   10
+      SATUR_LEVEL:      60000
+      GAIN:             2.0
+      PIXEL_SCALE:      0.53
+      SEEING_FWHM:      4.0
+      BACK_SIZE:        64
+      DEBLEND_MINCONT:  0.01
+
 
 
 

@@ -7,14 +7,20 @@ from astropy.stats import SigmaClip
 from photutils import ModeEstimatorBackground
 from photutils import aperture_photometry,CircularAperture,CircularAnnulus
 from reproject import reproject_interp
-from datetime import datetime as dt
+from datetime import datetime, timezone
 from tqdm.auto import tqdm
 from pathlib import Path
 import matplotlib.pyplot as plt
-from fits_io import read_fits_data, img_stats
+from fits_io import read_fits_data, img_stats, image_collection
 from matplotlib.gridspec import GridSpec
 import re
 from collections import defaultdict
+from ccdproc import ImageFileCollection
+from datetime import datetime
+
+
+
+
 
 #Delete files from possible previous run from the list
 
@@ -158,13 +164,13 @@ def comb(objname, filter_band, comb_list,scaled_list, objects_csv, output_path="
     #Combine
     imcombine_e(scaled_list,combine_file)
     #Calculate mean DATE-OBS
-    DOB = pd.Series([dt.strptime(i.header['DATE-OBS'],"%Y-%m-%dT%H:%M:%S.%f")
+    DOB = pd.Series([datetime.strptime(i.header['DATE-OBS'],"%Y-%m-%dT%H:%M:%S.%f")
                      for i in hdu_in])
     mean_DOB = DOB.mean()
     #Calculate mean TIME-OBS = UT and ST
-    TOB = pd.Series([dt.strptime(i.header['TIME-OBS'],"%H:%M:%S.%f")
+    TOB = pd.Series([datetime.strptime(i.header['TIME-OBS'],"%H:%M:%S.%f")
                     for i in hdu_in])
-    SidT = pd.Series([dt.strptime(i.header['ST'],"%H:%M:%S.%f")
+    SidT = pd.Series([datetime.strptime(i.header['ST'],"%H:%M:%S.%f")
                     for i in hdu_in])
     mean_TOB  = TOB.mean()
     mean_SidT = SidT.mean()
@@ -325,7 +331,7 @@ def bg_flux_im(filename,xy,fwhm):
     return(flux_value,bkg_value)
 
 def process_and_combine_images(image_files, objname, filter_band, objects_path, 
-                               output_path, objects_csv):
+                               output_path, objects_csv, restore_bkg=False):
     """
     Procesa imágenes con WCS válido:
     - mide FWHM
@@ -374,6 +380,7 @@ def process_and_combine_images(image_files, objname, filter_band, objects_path,
         
         first_star_center = tuple(map(float, image_pixel_coords[0]))
         fwhm_result = FWHM_im(image_path, first_star_center)
+        print(image_path, fwhm_result)
         # 
         if fwhm_result[3] <= 0:
             fname = image_path.name if hasattr(image_path, 'name') else image_path.split('/')[-1]
@@ -401,6 +408,7 @@ def process_and_combine_images(image_files, objname, filter_band, objects_path,
         if abs(fwhm_value - mean_fwhm) <= 3 * std_fwhm:
             good_seeing_images.append(image_path)
             good_seeing_fwhms.append(fwhm_value)
+            print("good seeing")
         else:
             fname = image_path.name if hasattr(image_path, 'name') else image_path.split('/')[-1]
             print(f"      ⚠️  Rejected (bad seeing): {fname} (FWHM={fwhm_value:.2f})")
@@ -422,12 +430,14 @@ def process_and_combine_images(image_files, objname, filter_band, objects_path,
     # -------------------- IMAGEN DE REFERENCIA --------------------
     reference_image_idx = len(good_seeing_images) // 2
     reference_flux_value = measured_fluxes[reference_image_idx]
+    ref_image = Path(good_seeing_images[reference_image_idx])
 
     # -------------------- ALINEADO CON WCS --------------------
     aligned_image_files = algn_with_wcs(good_seeing_images)
 
     # -------------------- ESCALADO --------------------
     scaled_image_files = []
+    scale_factors = []
     for aligned_image, background, flux in zip(aligned_image_files, measured_backgrounds, measured_fluxes):
         header_data_unit = fits.open(aligned_image)[0]
         image_data = fits.getdata(aligned_image).astype(float)
@@ -438,23 +448,67 @@ def process_and_combine_images(image_files, objname, filter_band, objects_path,
         output_filename = str(aligned_image).replace('.fits', '_scaled.fits')
         fits.writeto(output_filename, scaled_data, header_data_unit.header, overwrite=True)
         scaled_image_files.append(output_filename)
+        scale_factors.append(scaled_data)
 
 
     # -------------------- COMBINACIÓN --------------------
-    with open('input_combine.lst', 'w') as combine_list_file:
+    with open(output_path/'input_combine.lst', 'w') as combine_list_file:
         combine_list_file.write('\n'.join(scaled_image_files) + '\n')
     
     
     combined_image = comb(objname, filter_band, good_seeing_images, 
-                          'input_combine.lst', objects_csv, output_path)
+                          output_path/'input_combine.lst', objects_csv, output_path)
     
-    # -------------------- RESTAURAR FONDO --------------------
-    combined_header_unit = fits.open(combined_image)[0]
-    combined_data = fits.getdata(combined_image) + np.mean(measured_backgrounds)
+    # -------------------- RESTORE BACKGROUND --------------------
+    if restore_bkg:
+        data = fits.getdata(combined_image)
+        hdr = fits.getheader(combined_image)
     
-    fits.writeto(combined_image, combined_data, combined_header_unit.header, overwrite=True)
+        data += np.mean(measured_backgrounds)
+        fits.writeto(combined_image, data, hdr, overwrite=True)
 
-    print(f"         ✓ Successfully combined {len(good_seeing_images)} images")
+    # ============================================================
+    # 🧾 HEADER COMPLETO (PROVENANCE + PROCESO)
+    # ============================================================
+
+    hdul = fits.open(combined_image, mode="update")
+    hdr = hdul[0].header
+
+    # --- Identificación ---
+    hdr["NCOMB"] = len(scaled_image_files)
+    hdr["DATECOMB"] = datetime.now(timezone.utc).isoformat()
+    hdr["FILENAME"] = combined_image.name
+
+    # --- Referencia ---
+    hdr["REFIMG"] = (Path(ref_image).name, "Reference image")
+
+    # --- Estadísticas ---
+    hdr["FWHM_MN"] = float(np.mean(good_seeing_fwhms))
+    hdr["FWHM_STD"] = float(np.std(good_seeing_fwhms))
+    hdr["BKG_MEAN"] = float(np.mean(measured_backgrounds))
+    hdr["SCL_MEAN"] = float(np.mean(scale_factors))
+    hdr["SCL_STD"] = float(np.std(scale_factors))
+
+
+    # --- Flags de proceso ---
+    hdr["ALIGNED"] = True
+    hdr["SCALED"] = True
+    hdr["BKG_SUB"] = True
+    hdr["BKG_ADD"] = restore_bkg
+
+    # --- Historia ---
+    hdr.add_history("Aligned using WCS")
+    hdr.add_history("Background subtracted")
+    hdr.add_history("Flux scaled to reference")
+    hdr.add_history("Images combined")
+    hdr.add_history(f"{len(good_seeing_images)} images used:")
+    for file in good_seeing_images:
+        hdr.add_history(f"    {file}")
+    hdul.flush()
+    hdul.close()
+
+    print(f"         ✓ Combined image: {combined_image}")
+    print(f"         ✓ Used {len(scaled_image_files)} images")
 
     return combined_image
 
@@ -532,364 +586,376 @@ def plot_combined(objname, img_files, output_path, show=True):
 
     if show:
         plt.show()
-    
     print(f"      ✓ Combined plot saved: {output_path / f'combined_{objname}.png'}")
     plt.close(fig)
 
 
 
 
-def plot_alignment(dataset, night_dir, objname, filter_band, obj_ra, obj_dec, output_name=None, show=False,
-                   overwrite=False):
-    """
-    Genera un plot de control de calidad de la alineación:
-    Calibrated, aligned, scaled. Con círculo centrado en el objeto.
 
+def plot_alignment(images, objname, filter_band, obj_ra, obj_dec, 
+                          output_name=None, show=False, overwrite=False):
+    """
+    Plot unificado de control de calidad para el proceso de alineación.
+    Muestra: Calibrada, Alineada, Escalada + métricas de calidad.
+    
     Parameters
     ----------
-    dataset : dict
-        Diccionario devuelto por scan_dataset().
-    night_dir : Path
-        Directorio de la noche.
+    images : ImageFileCollection
+        Colección de metadatos de las imágenes de la noche
     objname : str
-        Nombre del objeto (para filtrar archivos).
+        Nombre del objeto (para filtrar archivos)
     filter_band : str
-        Banda fotométrica.
+        Banda fotométrica (ej: 'I', 'V')
     obj_ra : float
-        Right Ascension of the object in degrees.
+        Right Ascension del objeto en grados
     obj_dec : float
-        Declination of the object in degrees.
+        Declination del objeto en grados
     output_name : str or None
-        Nombre del archivo de salida. Si None, se usa 'reduction_<obj>.png'.
+        Nombre del archivo de salida. Si None, se usa 'alignment_<obj>_<band>.png'
     show : bool
-        Si True, muestra el plot en pantalla.
+        Si True, muestra el plot en pantalla
     overwrite : bool
-        Si False y la imágen existe, no hace nada.
-
+        Si False y la imagen existe, no hace nada
+        
+    Returns
+    -------
+    Path
+        Ruta del archivo PNG generado
     """
+    
     if output_name is None:
-        output_name = f"aligment_{objname}_{filter_band}.png"
+        output_name = f"alignment_{objname}_{filter_band}.png"
+    
+    night_dir = images.location
     output_path = night_dir / output_name
+    
     if output_path.exists() and not overwrite:
         print(f"      ✓ Plot already exists: {output_path} (overwrite=False). Skipping.")
         return output_path
 
     # ------------------------------------------------------------------
-    # Selección de archivos desde el dataset
+    # Selección y organización de archivos
     # ------------------------------------------------------------------
-    if isinstance(dataset, str) and dataset.endswith(".csv"):
-
-        ds = pd.read_csv(Path(dataset))
-        ds_obj = ds[(ds["OBJECT"] == objname) & ((ds["ASTROMET"] == "yes")|(ds["ASTROMET"] == "failure")) & 
-                    (~ds["FILENAME"].str.contains("comb", na=False)) &
-                    (ds["FILTERS"] == filter_band)
-                    ]
-
-
-        pattern = rf'{filter_band.lower()}(\d{{4}})'
-
-        # Diccionario maestro
-        images = defaultdict(lambda: {"calib": None, "trans": None, "scaled": None})
-
-        for fname in ds_obj["FILENAME"]:
-            match = re.search(pattern, fname)
-            if not match:
-                continue
-            
-            version = match.group(1)
-            path = Path(night_dir, fname)
-
-            if fname.endswith("_wcs.fits") and not fname.endswith("_wcs_trans.fits"):
-                images[version]["calib"] = path
-
-            elif fname.endswith("_wcs_trans.fits"):
-                images[version]["trans"] = path
-
-            elif fname.endswith("_scaled.fits"):
-                images[version]["scaled"] = path
-        versions_sorted = sorted(images.keys(), key=int)
-
-        calib  = []
-        alig   = []
-        scaled = []
-
-        for v in versions_sorted:
-            calib.append(images[v]["calib"])
-            alig.append(images[v]["trans"])
-            scaled.append(images[v]["scaled"])
-
-        '''
-        calib_files = [
-            Path(night_dir, fname)
-            for fname in ds_obj["FILENAME"] if not "trans" in fname 
-            and not "scaled" in fname
-        ]
-        files = ds_obj["FILENAME"]
-        ver = files.str.extract(rf'{filter_band.lower()}(\d{{4}})')[0]
-        is_trans = files.str.endswith("_wcs_trans.fits")
-        is_wcs   = files.str.endswith("_wcs.fits")
-        missing = set(ver[is_wcs]) - set(ver[is_trans])
-        mask = is_trans | (is_wcs & ver.isin(missing))
-        alig_files = sorted(
-            [Path(night_dir, f) for f in files[mask]],
-            key=lambda p: int(re.search(rf'{filter_band.lower()}(\d{{4}})', p.name).group(1))
-        )
-        scaled_files = [
-            Path(night_dir, fname)
-            for fname in ds_obj["FILENAME"] if fname.endswith("_scaled.fits") 
-        ]
-        '''
-        
-    else:
-        raise ValueError("dataset debe la ruta a un CSV de metadatos.")
-        
-        
-
-    if not (len(calib) == len(alig) == len(scaled)):
-        print(len(calib))
-        print(len(alig))
-        print(len(scaled))
-        raise ValueError("La cantidad de calib, aligned y scaled no coincide.")
-
-    n = len(calib)
+    df = images.summary.to_pandas()
     
-    if n==0:
-        print(f"      No images for object {objname}")
+    # Filtro más permisivo: incluye archivos intermedios (_trans, _scaled)
+    # que pueden no tener astromet actualizado
+    df_obj = df[
+        (df["object"] == objname) & 
+        (~df["filename"].str.contains("comb", na=False)) &
+        (df["filters"] == filter_band) &
+        (
+            (df["astromet"] == "yes") |  # Archivos con astrometría exitosa
+            (df["astromet"] == "failure") |  # Archivos con astrometría fallida
+            df["filename"].str.contains("_trans") |  # Archivos alineados
+            df["filename"].str.contains("_scaled")  # Archivos escalados
+        )
+    ]
+    
+    if len(df_obj) == 0:
+        print(f"      No images found for {objname} in {filter_band} band")
         return None
-
-    # ------------------------------------------------------------------
-    # Figura
-    # ------------------------------------------------------------------
-    fig = plt.figure(figsize=(10, 3*n))
-    gs = GridSpec(
-        nrows=n, ncols=3,
-    )
-
-    for i in tqdm(range(n), desc=f"      → Generating aligment plots"):
-        row = i
-        files_list = [calib[i], alig[i], scaled[i]]
-
-        titles = [
-            f"Calibrated: {calib[i].stem}" if calib[i] else "Calibrated",
-            f"Aligned: {alig[i].stem}" if alig[i] else "Aligned",
-            f"Scaled: {scaled[i].stem}" if scaled[i] else "Scaled"
-        ]
-
-        for j in range(3):
-
-            ax_img = fig.add_subplot(gs[row, j])
-
-            # ---- CASE 1: File exists ----
-            if isinstance(files_list[j], Path):
-
-                if j == 1:  # aligned panel
-                    astro_row = ds[ds["FILENAME"] == files_list[j].name]
-                    astro = astro_row["ASTROMET"].values[0] if len(astro_row) else "N/A"
-                    title = f"Aligned: {files_list[j].stem} ASTRO: {astro}"
-                else:
-                    title = titles[j]
-
-                img = read_fits_data(files_list[j])
-
-                vmin, vmax = np.percentile(img, 5), np.percentile(img, 99)
-
-                im = ax_img.imshow(
-                    img,
-                    origin="lower",
-                    cmap="gray",
-                    vmin=vmin,
-                    vmax=vmax
-                )
-
-                ax_img.set_title(titles[j], fontsize=8)
-                ax_img.axis("off")
-
-                # Plot circle if coordinates available
-                if obj_ra is not None and obj_dec is not None:
-                    with fits.open(files_list[j]) as hdul:
-                        w = wcs.WCS(hdul[0].header)
-                        pix_x, pix_y = w.wcs_world2pix([[obj_ra, obj_dec]], 0)[0]
-                        circle = plt.Circle(
-                            (pix_x, pix_y),
-                            radius=20,
-                            color="yellow",
-                            fill=False,
-                            linewidth=1
-                        )
-                        ax_img.add_patch(circle)
-
-                cb = fig.colorbar(im, ax=ax_img, fraction=0.03, pad=0.02)
-                cb.ax.tick_params(labelsize=7)
-
-            # ---- CASE 2: Failed image ----
-            else:
-                ax_img.set_facecolor("black")
-                ax_img.text(
-                    0.5, 0.5,
-                    "IMAGE FAILED\nQuality check not passed",
-                    color="red",
-                    fontsize=10,
-                    ha="center",
-                    va="center",
-                    transform=ax_img.transAxes
-                )
-                ax_img.set_title(titles[j] + " (FAILED)", fontsize=8, color="red")
-                ax_img.axis("off")
-
-
-    fig.suptitle(
-        f"Noche: {night_dir.name}   |   Objeto: {objname}",
-        fontsize=12,
-        y=0.99
-    )
-
-    output_path = night_dir / output_name
-    plt.savefig(output_path, bbox_inches="tight", pad_inches=0.05, dpi=150)
-    print(f"      ✓ Plot saved as {output_path}")
-    if show:
-        plt.show()
-    else:
-        plt.close(fig)
-
-    return output_path
-
-def plot_alignment_qc(dataset, night_dir, objname, filter_band,
-                    obj_ra, obj_dec, fwhm_dict=None,
-                    flux_scale_dict=None,
-                    output_name=None, show=False, overwrite=False):
-
-    output_name = f"qc_alignment_{objname}_{filter_band}.png"
-    output_path = night_dir / output_name
-    if output_path.exists() and not overwrite:
-        print(f"      ✓ Plot already exists: {output_path}")
-        return output_path
-
-    # ---------- Leer dataset ----------
-    if isinstance(dataset, str) and dataset.endswith(".csv"):
-
-        ds = pd.read_csv(Path(dataset))
-        ds_obj = ds[(ds["OBJECT"] == objname) & (ds["ASTROMET"]=="yes") & 
-                    (~ds["FILENAME"].str.contains("comb", na=False)) &
-                    (ds["FILTERS"] == filter_band)
-                    ]
-        calib_files = [
-            Path(night_dir, fname)
-            for fname in ds_obj["FILENAME"] if not "trans" in fname 
-            and not "scaled" in fname
-        ]
-        files = ds_obj["FILENAME"]
-        ver = files.str.extract(rf'{filter_band.lower()}(\d{{4}})')[0]
-        is_trans = files.str.endswith("_wcs_trans.fits")
-        is_wcs   = files.str.endswith("_wcs.fits")
-        missing = set(ver[is_wcs]) - set(ver[is_trans])
-        mask = is_trans | (is_wcs & ver.isin(missing))
-        alig_files = sorted(
-            [Path(night_dir, f) for f in files[mask]],
-            key=lambda p: int(re.search(rf'{filter_band.lower()}(\d{{4}})', p.name).group(1))
-        )
-        scaled_files = [
-            Path(night_dir, fname)
-            for fname in ds_obj["FILENAME"] if fname.endswith("_scaled.fits") 
-        ]
-        
-    else:
-        raise ValueError("dataset debe la ruta a un CSV de metadatos.")
-
-    calib = sorted(calib_files)
-    alig = sorted(alig_files)
-    scaled = sorted(scaled_files)
     
-    n = len(calib)
-    if n == 0:
-        print("No images found")
-        return
-
-    # Imagen de referencia para residuos
-    ref_img = fits.getdata(alig[len(alig)//2])
-
-    fig = plt.figure(figsize=(18, 4*n))
-    gs = GridSpec(nrows=n, ncols=5)
-
-    cut = 30  # tamaño del zoom
-
-    for i in tqdm(range(n), desc="QC plots"):
-        imgs = [fits.getdata(calib[i]),
-                fits.getdata(alig[i]),
-                fits.getdata(scaled[i])]
-        files_list = [calib[i], alig[i], scaled[i]]
-        labels = ["Calibrated", "Aligned", "Scaled"]
-
-        for k in range(3):
-
-            img = imgs[k]
-            with fits.open(files_list[k]) as hdul:
-                w = wcs.WCS(hdul[0].header)
-                px, py = w.wcs_world2pix([[obj_ra, obj_dec]], 0)[0]
-
-            x, y = int(px), int(py)
-            sub = img[y-cut:y+cut, x-cut:x+cut]
-
-            # ---------- Imagen completa ----------
-            ax = fig.add_subplot(gs[i, 0])
-            vmin, vmax = np.percentile(img, (5, 99))
-            ax.imshow(img, origin="lower", cmap="gray", vmin=vmin, vmax=vmax)
-            ax.set_title(labels[k], fontsize=9)
-            ax.axis("off")
-            ax.add_patch(plt.Circle((px, py), 20, color='red', fill=False))
-
-            # ---------- Zoom ----------
-            axz = fig.add_subplot(gs[i, 1])
-            med = np.median(sub)
-            std = np.std(sub)
-            axz.imshow(sub, origin="lower", cmap="gray",
-                        vmin=med-3*std, vmax=med+10*std)
-            axz.set_title("Zoom", fontsize=8)
-            axz.axis("off")
-
-            # Métricas
-            flux = np.sum(sub - med)
-            snr = flux / (std*np.sqrt(sub.size))
-            fwhm_val = fwhm_dict.get(files_list[k].name, np.nan) if fwhm_dict else np.nan
-            scale_val = flux_scale_dict.get(files_list[k].name, 1.0) if flux_scale_dict else 1.0
-
-            txt = f"FWHM={fwhm_val:.2f}\nScale={scale_val:.2f}\nBkg={med:.1f}\nσ={std:.1f}\nS/N≈{snr:.1f}"
-            axz.text(0.02, -0.25, txt, transform=axz.transAxes, fontsize=8, va='top')
-
-            # ---------- Residuo ----------
-            axr = fig.add_subplot(gs[i, 2])
-            if k == 1:  # residuos solo para alineadas
-                res = sub - ref_img[y-cut:y+cut, x-cut:x+cut]
-                rstd = np.std(res)
-                axr.imshow(res, origin="lower", cmap="coolwarm",
-                            vmin=-3*rstd, vmax=3*rstd)
-                axr.set_title("Residual", fontsize=8)
-            axr.axis("off")
-
-            # ---------- Perfil radial ----------
-            axp = fig.add_subplot(gs[i, 3])
-            yy, xx = np.indices(sub.shape)
-            r = np.sqrt((xx-cut)**2 + (yy-cut)**2).astype(int)
-            tbin = np.bincount(r.ravel(), sub.ravel())
-            nr = np.bincount(r.ravel())
-            radial_profile = tbin / np.maximum(nr, 1)
-            axp.plot(radial_profile, lw=1)
-            axp.set_title("Radial profile", fontsize=8)
-            axp.set_xlim(0, cut)
-
-            # ---------- Histograma fondo ----------
-            axh = fig.add_subplot(gs[i, 4])
-            axh.hist(sub.ravel(), bins=40, histtype="step")
-            axh.axvline(med, color='r', ls='--')
-            axh.set_title("Background hist", fontsize=8)
-
-    fig.suptitle(f"QC Alignment — {objname} ({filter_band})", fontsize=14)
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=150)
-    print(f"      ✓ QC plot saved: {output_path}")
-
+    # Patrón para extraer número de versión (ej: i0001, v0042)
+    pattern = rf'{filter_band.lower()}(\d{{4}})'
+    
+    # Diccionario: version -> {"calib": path, "trans": path, "scaled": path, "status": str}
+    images_dict = defaultdict(lambda: {
+        "calib": None, 
+        "trans": None, 
+        "scaled": None,
+        "status": "unknown",
+        "qc_fwhm": None,
+        "qc_see": None  # ⭐ Cambiado de qc_seeing a qc_see
+    })
+    
+    # Clasificar archivos por versión
+    # Primero: archivos del DataFrame (para metadata como qc_fwhm)
+    for _, row in df_obj.iterrows():
+        fname = row["filename"]
+        match = re.search(pattern, fname)
+        if not match:
+            continue
+        
+        version = match.group(1)
+        path = Path(night_dir, fname)
+        
+        # Calibrada (solo WCS, sin transformar)
+        if fname.endswith("_wcs.fits") and not fname.endswith("_wcs_trans.fits"):
+            images_dict[version]["calib"] = path
+            images_dict[version]["status"] = row.get("astromet", "unknown")
+            images_dict[version]["qc_fwhm"] = row.get("qc_fwhm", None)
+            images_dict[version]["qc_see"] = row.get("qc_see", None)  # ⭐ Cambiado
+    
+    # Segundo: buscar archivos _trans y _scaled directamente en el filesystem
+    # (estos pueden no estar en el DataFrame si fueron creados después de la última indexación)
+    for calib_path in [v["calib"] for v in images_dict.values() if v["calib"]]:
+        version_match = re.search(pattern, calib_path.name)
+        if not version_match:
+            continue
+        version = version_match.group(1)
+        
+        # Buscar archivo _trans correspondiente
+        trans_path = calib_path.parent / f"{calib_path.stem}_trans.fits"
+        if trans_path.exists():
+            images_dict[version]["trans"] = trans_path
+        
+        # Buscar archivo _scaled correspondiente
+        # El patrón puede ser complejo, buscar variaciones
+        for scaled_candidate in calib_path.parent.glob(f"*{filter_band.lower()}{version}*_scaled.fits"):
+            images_dict[version]["scaled"] = scaled_candidate
+            break
+    
+    # Ordenar versiones numéricamente
+    versions_sorted = sorted(images_dict.keys(), key=int)
+    n_images = len(versions_sorted)
+    
+    if n_images == 0:
+        print(f"      No valid image sequences found for {objname}")
+        return None
+    
+    # ------------------------------------------------------------------
+    # Crear figura
+    # ------------------------------------------------------------------
+    # 3 columnas (calib, aligned, scaled) + 1 para métricas
+    fig = plt.figure(figsize=(16, 3.5 * n_images))
+    gs = GridSpec(
+        nrows=n_images, 
+        ncols=4,
+        width_ratios=[1, 1, 1, 0.4],
+        hspace=0.25,
+        wspace=0.15
+    )
+    
+    print(f"      → Generating alignment plots for {n_images} images...")
+    
+    for i, version in enumerate(tqdm(versions_sorted, desc="      → Processing")):
+        img_info = images_dict[version]
+        
+        calib_path = img_info["calib"]
+        trans_path = img_info["trans"]
+        scaled_path = img_info["scaled"]
+        astro_status = img_info["status"]
+        qc_fwhm = img_info["qc_fwhm"]
+        qc_see = img_info["qc_see"]  # ⭐ Cambiado
+        
+        # Lista de paths y títulos
+        paths = [calib_path, trans_path, scaled_path]
+        titles = ["Calibrated", "Aligned", "Scaled"]
+        
+        # Estados de cada etapa
+        states = []
+        
+        # ------------------------------------------------------------------
+        # Plotear las 3 imágenes
+        # ------------------------------------------------------------------
+        for j, (path, title) in enumerate(zip(paths, titles)):
+            ax = fig.add_subplot(gs[i, j])
+            
+            # ---- CASO 1: Archivo existe ----
+            if path and path.exists():
+                try:
+                    img_data = fits.getdata(path).astype(float)
+                    
+                    # Normalización robusta
+                    vmin = np.nanpercentile(img_data, 5)
+                    vmax = np.nanpercentile(img_data, 99)
+                    
+                    im = ax.imshow(
+                        img_data,
+                        origin="lower",
+                        cmap="gray",
+                        vmin=vmin,
+                        vmax=vmax
+                    )
+                    
+                    # Título con información de estado
+                    if j == 1:  # Panel de aligned
+                        title_text = f"{title} (astromet: {astro_status})"
+                    else:
+                        title_text = f"{title}"
+                    
+                    ax.set_title(title_text, fontsize=9)
+                    ax.axis("off")
+                    
+                    # Círculo en posición del objeto
+                    if obj_ra is not None and obj_dec is not None:
+                        try:
+                            w = wcs.WCS(fits.getheader(path))
+                            pix_x, pix_y = w.wcs_world2pix([[obj_ra, obj_dec]], 0)[0]
+                            
+                            # Verificar que está dentro de la imagen
+                            ny, nx = img_data.shape
+                            if 0 <= pix_x < nx and 0 <= pix_y < ny:
+                                circle = plt.Circle(
+                                    (pix_x, pix_y),
+                                    radius=25,
+                                    color="lime",
+                                    fill=False,
+                                    linewidth=1.5,
+                                    alpha=0.8
+                                )
+                                ax.add_patch(circle)
+                            else:
+                                # Objeto fuera del FOV
+                                ax.text(
+                                    0.5, 0.98,
+                                    "Object outside FOV",
+                                    transform=ax.transAxes,
+                                    ha="center", va="top",
+                                    fontsize=7,
+                                    color="red",
+                                    bbox=dict(boxstyle="round,pad=0.3", 
+                                            facecolor="black", alpha=0.6)
+                                )
+                        except Exception:
+                            pass  # Si falla WCS, no plotear círculo
+                    
+                    # Colorbar pequeño
+                    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.02)
+                    cbar.ax.tick_params(labelsize=6)
+                    
+                    states.append("OK")
+                    
+                except Exception as e:
+                    # Error al leer archivo
+                    ax.set_facecolor("black")
+                    ax.text(
+                        0.5, 0.5,
+                        f"ERROR\nCannot read file\n{str(e)[:30]}",
+                        color="red",
+                        fontsize=8,
+                        ha="center", va="center",
+                        transform=ax.transAxes
+                    )
+                    ax.set_title(f"{title} (ERROR)", fontsize=9, color="red")
+                    ax.axis("off")
+                    states.append("ERROR")
+            
+            # ---- CASO 2: Archivo no existe ----
+            else:
+                ax.set_facecolor("#1a1a1a")
+                
+                # Determinar razón de fallo
+                if j == 0:  # Calibrada
+                    reason = "Calibration failed"
+                elif j == 1:  # Alineada
+                    if astro_status == "failure":
+                        reason = "Astrometry failed"
+                    else:
+                        reason = "Alignment not performed"
+                elif j == 2:  # Escalada
+                    reason = "Scaling not performed"
+                else:
+                    reason = "File missing"
+                
+                ax.text(
+                    0.5, 0.5,
+                    f"NOT AVAILABLE\n{reason}",
+                    color="orange",
+                    fontsize=9,
+                    ha="center", va="center",
+                    transform=ax.transAxes,
+                    bbox=dict(boxstyle="round,pad=0.5", 
+                            facecolor="black", alpha=0.7)
+                )
+                ax.set_title(f"{title} (N/A)", fontsize=9, color="orange")
+                ax.axis("off")
+                states.append("N/A")
+        
+        # ------------------------------------------------------------------
+        # Panel de métricas (4ta columna)
+        # ------------------------------------------------------------------
+        ax_metrics = fig.add_subplot(gs[i, 3])
+        ax_metrics.axis("off")
+        
+        # Construir texto de métricas
+        metrics_text = f"Version: {filter_band.lower()}{version}\n"
+        metrics_text += "─" * 20 + "\n"
+        
+        # Estado del pipeline
+        metrics_text += f"Calibrated:  {states[0]}\n"
+        metrics_text += f"Aligned:     {states[1]}\n"
+        metrics_text += f"Scaled:      {states[2]}\n"
+        metrics_text += "─" * 20 + "\n"
+        
+        # QC metrics
+        if qc_fwhm is not None and not pd.isna(qc_fwhm):
+            try:
+                fwhm_val = float(qc_fwhm)
+                metrics_text += f"FWHM: {fwhm_val:.2f} pix\n"
+            except (ValueError, TypeError):
+                metrics_text += "FWHM: N/A\n"
+        else:
+            metrics_text += "FWHM: N/A\n"
+        
+        if qc_see is not None and not pd.isna(qc_see):
+            try:
+                seeing_val = float(qc_see)
+                metrics_text += f"Seeing: {seeing_val:.2f} \"\n"
+            except (ValueError, TypeError):
+                metrics_text += "Seeing: N/A\n"
+        else:
+            metrics_text += "Seeing: N/A\n"
+        
+        metrics_text += "─" * 20 + "\n"
+        
+        # Astrometry status
+        if astro_status == "yes":
+            astro_color = "lime"
+            astro_symbol = "✓"
+        elif astro_status == "failure":
+            astro_color = "red"
+            astro_symbol = "✗"
+        else:
+            astro_color = "gray"
+            astro_symbol = "?"
+        
+        metrics_text += f"Astrometry: {astro_symbol}\n"
+        
+        # Calcular estadísticas si existe scaled
+        if scaled_path and scaled_path.exists():
+            try:
+                data = fits.getdata(scaled_path)
+                med = np.nanmedian(data)
+                std = np.nanstd(data)
+                metrics_text += "─" * 20 + "\n"
+                metrics_text += f"Med: {med:.1f} ADU\n"
+                metrics_text += f"Std: {std:.1f} ADU\n"
+            except Exception:
+                pass
+        
+        # Renderizar texto
+        ax_metrics.text(
+            0.05, 0.95,
+            metrics_text,
+            transform=ax_metrics.transAxes,
+            fontsize=8,
+            va="top", ha="left",
+            family="monospace",
+            bbox=dict(boxstyle="round,pad=0.5", 
+                     facecolor="black", alpha=0.3)
+        )
+    
+    # ------------------------------------------------------------------
+    # Título general
+    # ------------------------------------------------------------------
+    fig.suptitle(
+        f"Alignment Quality Control — {objname} ({filter_band} band) — Night: {night_dir.name}",
+        fontsize=13,
+        y=0.995
+    )
+    
+    # ------------------------------------------------------------------
+    # Guardar
+    # ------------------------------------------------------------------
+    plt.savefig(output_path, bbox_inches="tight", pad_inches=0.1, dpi=150)
+    print(f"      ✓ Alignment plot saved: {output_path}")
+    
     if show:
         plt.show()
     else:
         plt.close(fig)
-
+    
     return output_path

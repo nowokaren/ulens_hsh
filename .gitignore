@@ -21,3 +21,11 @@ sn_hsh_pipeline/process_HSH_SN/autophot/
 ulens_hsh/input_combine.lst
 ulens_hsh/input_combine.lst
 data1/
+ulens_hsh/combined_photometry_catalog.csv
+
+# Large generated catalog
+ulens_hsh/combined_photometry_catalog.csv
+
+# Large local QC/output data
+ulens_hsh/metadata/espacio_qc/
+ulens_hsh/redutest/

@@ -29,6 +29,8 @@ from astropy.coordinates import SkyCoord
 from tqdm.auto import tqdm
 import astropy.units as u
 
+warnings.filterwarnings("ignore", category=UserWarning, module="astropy")
+
 
 
 # =============================================================================
@@ -50,288 +52,216 @@ def remove_file(filename):
 # =============================================================================
 
 
-
-def scan_dataset(path="."):
-    """
-    Escanea un directorio y clasifica archivos FITS por tipo y estado de calibración.
-
-    Estados:
-    - raw: sin calibraciones
-    - calibz: bias-subtracted
-    - calibf: flat-corrected
-    - astro: con solución astrométrica aplicada
-
-    Returns
-    -------
-    dict
-        Diccionario con listas de archivos (todos Path absolutos):
-        - dir
-        - all
-        - bias
-        - darks_raw, darks_cal
-        - flats_raw, flats_cal
-        - images_raw, images_cal, images_flat, images_astro
-    """
-    p = Path(path).resolve()
-    images = ImageFileCollection(p, keywords='*')
-
-    # Todos los FITS
-    all_fits = sorted(p.glob("*.fit")) + sorted(p.glob("*.fits"))
-    all_fits = [f.resolve() for f in all_fits]
-
-    # ------------------------------------------------------------------
-    # Bias
-    # ------------------------------------------------------------------
-    bias = [ (p / f).resolve() for f in images.files_filtered(object='bias') ]
-
-    # ------------------------------------------------------------------
-    # Darks
-    # ------------------------------------------------------------------
-    darks_raw = images.files_filtered(imagetyp='dark')
-    darks_cal = images.files_filtered(imagetyp='dark', calibz='subtracted bias')
-
-    darks_raw = [ (p / f).resolve() for f in darks_raw if f not in darks_cal ]
-    darks_cal = [ (p / f).resolve() for f in darks_cal ]
-
-    # ------------------------------------------------------------------
-    # Flats
-    # ------------------------------------------------------------------
-    flats_raw = images.files_filtered(object='skyflat')
-    flats_cal = images.files_filtered(object='skyflat', calibz='subtracted bias')
-
-    # ------------------------------------------------------------------
-    # Science images
-    # ------------------------------------------------------------------
-    images_raw   = images.files_filtered(imagetyp='object')
-    images_cal   = images.files_filtered(imagetyp='object', calibz='subtracted bias')
-    images_flat  = images.files_filtered(imagetyp='object', calibf='flat correction')
-
-    # Imágenes con astrometría aplicada (ASTROMET = 'yes')
-    images_astro = images.files_filtered(imagetyp='object', astromet='yes')
-    images_astro_failed = images.files_filtered(imagetyp='object', astromet='failure')
-    
-    # Imágenes combinadas (NCOMBINE presente)
-    images_combined = images.files_filtered(imagetyp='object', ncombine='*')
-
-    # ------------------------------------------------------------------
-    # Eliminar solapamientos (jerarquía: comb  astro > flat > calib > raw)
-    # ------------------------------------------------------------------
-    images_raw  = [f for f in images_raw if f not in images_cal and f not in images_flat 
-                   and f not in images_astro and f not in flats_raw]
-    images_cal  = [f for f in images_cal if f not in images_flat and f not in images_astro
-                   and f not in flats_cal]
-    images_flat = [f for f in images_flat if f not in images_astro and f not in images_astro_failed]
-    images_astro = [f for f in images_astro if f not in images_combined and f not in images_astro_failed]
-
-    # Convertir a Path absolutos
-    images_combined = [ (p / f).resolve() for f in images_combined ]
-    flats_raw = [ (p / f).resolve() for f in flats_raw if f not in flats_cal ]
-    flats_cal = [ (p / f).resolve() for f in flats_cal ]
-    images_raw   = [ (p / f).resolve() for f in images_raw ]
-    images_cal   = [ (p / f).resolve() for f in images_cal ]
-    images_flat  = [ (p / f).resolve() for f in images_flat ]
-    images_astro = [ (p / f).resolve() for f in images_astro ]
-
-
-
-    return {
-        "dir": p,
-        "all": all_fits,
-        "bias": bias,
-        "darks_raw": darks_raw,
-        "darks_cal": darks_cal,
-        "flats_raw": flats_raw,
-        "flats_cal": flats_cal,
-        "images_raw": images_raw,
-        "images_cal": images_cal,
-        "images_flat": images_flat,
-        "images_astro": images_astro,
-        "images_astro_failed": images_astro_failed,
-        "images_combined": images_combined
-    }
-
 # =============================================================================
 # Edición y normalización de headers
 # =============================================================================
 
-def update_headers(fits_files, gain, rdnoise):
-    """
-    Normaliza headers de una lista de archivos FITS:
-    - Agrega GAIN y RDNOISE
-    - Normaliza FILTERS
-    - Convierte MJD-OBS -> DATE-OBS (ISO)
-    - Asigna OBJECT en imágenes de calibración
-    """
-    for file in fits_files:
-        with fits.open(file, 'update') as f:
-            for hdu in f:
-                hdu.header['GAIN'] = gain
-                hdu.header['RDNOISE'] = rdnoise
-                hdu.header['FILENAME'] = str(file)
+def image_collection(night_dir, meta_csv=None ):
+    images = ImageFileCollection(night_dir, keywords='*')
+    if meta_csv is not None:
+        df = images.summary.to_pandas()
+        df.to_csv(meta_csv, index=False)
+    return images
 
-                # Filtro
-                if 'FILTER01' in hdu.header:
-                    filter_str = hdu.header['FILTER01'].strip()
-                    filter_letter = (
-                        filter_str[-1] if filter_str[-1].isalpha() else 'NONE'
-                    )
-                    hdu.header['FILTERS'] = filter_letter
-                    
-                if 'FILTER' in hdu.header:
-                    filter_str = hdu.header['FILTER'].strip()
-                    filter_letter = (
-                        filter_str[-1] if filter_str[-1].isalpha() else 'NONE'
-                    )
-                    hdu.header['FILTERS'] = filter_letter
-                    
+def update_headers(images: ImageFileCollection, gain: float, rdnoise: float, force_defaults: bool = False):
+    """
+    Normaliza y completa los headers de todos los archivos FITS en la colección.
+    
+    Agrega/normaliza:
+    - GAIN, RDNOISE
+    - FILENAME
+    - FILTERS (a partir de FILTER o FILTER01)
+    - DATE-OBS (a partir de MJD-OBS si existe)
+    - OBJECT para calibraciones (bias, dark, skyflat)
+    - Keywords de estado del pipeline con valores por defecto:
+        CALIBZ, CALIBF, ASTROMET, OBJ_IN, NCOMBINE, INPUT_IMGS, QC_*
+    
+    Parámetros:
+    -----------
+    images : ImageFileCollection
+        Colección de imágenes del directorio
+    gain : float
+        Valor de gain del instrumento
+    rdnoise : float
+        Valor de read noise del instrumento
+    force_defaults : bool
+        Si True, sobreescribe keywords de estado aunque ya existan
+        (útil solo en la primera ejecución o para resetear)
+    """
+    # Convertimos a DataFrame para iterar fácilmente
+    #images = ImageFileCollection(night_dir, keywords='*')
+    
+    summary = images.summary.to_pandas()
+    
+    state_keywords = {
+        # Etapas de reducción
+        'CALIBZ':     'no',           # 'no' → 'subtracted bias'
+        'CALIBD':     'no',           # 'no' → 'subtracted dark'
+        'CALIBF':     'no',           # 'no' → 'flat correction applied'
+        'CRCLEAN':    'no',
+        'ASTROMET':   'no',           # 'no' → 'yes' → 'failure'
+        
+        # Contenido científico,
+        'ORIG_OBJ':   '',
+        'OBJ_IN':     '',          # si el objeto objetivo está en el campo
+        'OBJ_STAT':   'NOT_CHECKED',  # NOT_CHECKED, OK, CORRECTED, NO_MATCH, ERROR
+        
+        # Combinación
+        'NCOMBINE':   '',
+        'INPUT_IMGS': '',             # lista de nombres separados por coma
+        
+        # Quality Control (se irán llenando después)
+        'QC_NSRCS':   '',
+        'QC_FWHM':    '',
+        'QC_ELLIP':   '',
+        'QC_USE':     '',
+        'QC_FLAGS':   '',
+        'QC_DATE':    '',
+    }
 
+    updated_count = 0
+    
+    for idx, row in summary.iterrows():
+        filepath = Path(images.location) / row['file']
+        
+        try:
+            with fits.open(filepath, mode='update') as hdulist:
+                hdr = hdulist[0].header
+
+                
+                # ───────────────────────────────────────────────
+                # Siempre actualizamos estos (son instrumentales)
+                # ───────────────────────────────────────────────
+                hdr['GAIN'] = gain
+                hdr['RDNOISE'] = rdnoise
+                hdr['FILENAME'] = filepath.name
+                
+                # Filtro → estandarizamos a 'FILTERS'
+                if 'FILTER01' in hdr:
+                    fstr = str(hdr['FILTER01']).strip()
+                    hdr['FILTERS'] = fstr[-1] if fstr[-1].isalpha() else 'NONE'
+                elif 'FILTER' in hdr:
+                    fstr = str(hdr['FILTER']).strip()
+                    hdr['FILTERS'] = fstr[-1] if fstr[-1].isalpha() else 'NONE'
+                
                 # Fecha
-                if 'MJD-OBS' in hdu.header:
-                    hdu.header['DATE-OBS'] = (
-                        Time(float(hdu.header['MJD-OBS']), format='mjd')
-                        .iso.replace(" ", "T")
-                    )
+                if 'MJD-OBS' in hdr and 'DATE-OBS' not in hdr:
+                    try:
+                        t = Time(float(hdr['MJD-OBS']), format='mjd')
+                        hdr['DATE-OBS'] = t.iso.replace(" ", "T")
+                    except:
+                        pass
+                
+                # Calibraciones → asignamos OBJECT estándar
+                if 'IMAGETYP' in hdr:
+                    typ = str(hdr['IMAGETYP']).lower()
+                    if 'zero' in typ or 'bias' in typ:
+                        hdr['OBJECT'] = 'bias'
+                    elif 'dark' in typ:
+                        hdr['OBJECT'] = 'dark'
+                    elif 'flat' in typ or 'skyflat' in typ:
+                        hdr['OBJECT'] = 'skyflat'
 
-                # Tipo de objeto para calibraciones
-                if 'IMAGETYP' in hdu.header:
-                    if hdu.header['IMAGETYP'] == 'zero':
-                        hdu.header['OBJECT'] = 'bias'
-                    elif hdu.header['IMAGETYP'] == 'dark':
-                        hdu.header['OBJECT'] = 'dark'
-                    elif hdu.header['IMAGETYP'] == 'flat':
-                        hdu.header['OBJECT'] = 'skyflat'
+                # ───────────────────────────────────────────────
+                # Keywords de estado del pipeline (solo si no existen o force=True)
+                # ───────────────────────────────────────────────
+                for key, default in state_keywords.items():
+
+                    if key not in hdr.keys() or force_defaults:
+                        hdr[key] = default
+                
+                hdulist.flush()
+                updated_count += 1
+                
+        except Exception as e:
+            print(f"Error actualizando {filepath.name}: {e}")
+            continue
+    
+
+    print(f"Headers actualizados en {updated_count} archivos.")
+    return updated_count
 
 
 # =============================================================================
 # Exportación de metadatos
 # =============================================================================
 
-def dataset_metadata(dataset, night_dir, output_file="images_data.csv",
-                     objects_csv=None, max_sep_deg=0.5, load_changes=True):
+def match_objects_to_catalog(
+    images: ImageFileCollection,
+    objects_csv = None,
+    max_sep_deg: float = 0.5,
+    only_raw: bool = True
+) -> int:
     """
-    Genera una tabla con información del header de los archivos FITS.
-    Si se proporciona un catálogo de objetos (objects_csv), intenta
-    corregir el OBJECT según la posición (RA, DEC) y sobrescribe el FITS
-    si hay cambios.
+    Corrige el keyword OBJECT en los headers usando un catálogo de coordenadas.
+    Escribe OBJ_STAT y (si corrige) ORIG_OBJ.
+    
+    Retorna cuántos archivos fueron modificados.
     """
-
-    output_path = Path(night_dir, output_file)
-
-
-    keys = [
-        'IMAGETYP', 'CALIBZ', 'CALIBF', 'ASTROMET', 'OBJECT', 'RA', 'DEC', 'EXPTIME', 'GAIN',
-        'RDNOISE', 'FILTERS', 'DATE-OBS', 'TIME-OBS', 'MJD-OBS', 'AIRMASS',
-        'FILENAME', 'OBJ_STAT', 'OBJ_IN', "NCOMBINE"
-    ]
-
-    if load_changes and output_path.exists():
-        df_existing = pd.read_csv(output_path)
-        loaded_filenames = set(df_existing["FILENAME"].astype(str))
-        values = df_existing.to_dict("records")
-    else:
-        loaded_filenames = set()
-        values = []
-
-    # Cargar catálogo si se proporciona
-    if objects_csv is not None:
-        objects_df = pd.read_csv(objects_csv)
-        catalog_coords = SkyCoord(
-            ra=objects_df["ra_deg"].values * u.deg,
-            dec=objects_df["dec_deg"].values * u.deg
-        )
-    else:
-        objects_df = None
-        catalog_coords = None
+    if not objects_csv:
+        return 0
 
 
+    objects_df = pd.read_csv(objects_csv)
+    catalog_coords = SkyCoord(
+        ra=objects_df["ra_deg"].values * u.deg,
+        dec=objects_df["dec_deg"].values * u.deg
+    )
 
-    for file in tqdm(dataset["all"], desc="   Processing FITS files"):
+    summary = images.summary.to_pandas()
+    updated = 0
 
-        file = Path(file)
-        if file.name in loaded_filenames:
+    for _, row in tqdm(summary.iterrows(), total=len(summary), desc="Matching objects"):
+        filepath = images.location / row["file"]
+        hdr = fits.getheader(filepath)
+
+        # Opcional: solo procesar raw si se pide
+        if only_raw and str(hdr.get("CALIBZ", "")).lower() != "no":
             continue
-        hdr = getheader(file)
 
-        # --- Corrección del objeto si corresponde ---
-        if objects_df is not None:
-            obj_match_status = "NOT_CHECKED"
-            # Opcional: limitar solo a imágenes crudas
-            if dataset is None or file in dataset.get("images_raw", []):
+        try:
+            ra = hdr.get("RA")
+            dec = hdr.get("DEC")
+            if not (ra and dec):
+                continue
 
-                ra = hdr.get("RA")
-                dec = hdr.get("DEC")
+            img_coord = SkyCoord(ra=ra, dec=dec, unit=(u.hourangle, u.deg))
+            sep = img_coord.separation(catalog_coords)
+            min_sep = sep.min().deg
 
-                try:
-                    # RA puede venir en hh:mm:ss y DEC en grados
-                    img_coord = SkyCoord(ra=ra, dec=dec, unit=(u.hourangle, u.deg))
-                    sep = img_coord.separation(catalog_coords)
-                    min_sep = sep.min()
-                    best_idx = sep.argmin()
+            if min_sep > max_sep_deg:
+                status = "NO_MATCH"
+            else:
+                true_name = objects_df.iloc[sep.argmin()]["objeto"]
+                current = hdr.get("OBJECT", "").strip()
 
-                    if min_sep < max_sep_deg * u.deg:
-                        true_name = objects_df.iloc[best_idx]["objeto"]
-
-                        if hdr.get("OBJECT") != true_name:
-                            # Guardar objeto original
-                            hdr["ORIG_OBJ"] = hdr.get("OBJECT")
-                            hdr["OBJECT"] = true_name
-                            obj_match_status = "CORRECTED"
-
-
-                        else:
-                            obj_match_status = "OK"
+                with fits.open(filepath, mode="update") as hdul:
+                    if current and current != true_name:
+                        hdul[0].header["ORIG_OBJ"] = current
+                        hdul[0].header["OBJECT"] = true_name
+                        status = "CORRECTED"
+                        updated += 1
                     else:
-                        obj_match_status = "NO_MATCH"
+                        status = "OK" if current == true_name else "MATCHED"
 
-                except Exception as e:
-                    obj_match_status = "ERROR"
-            with fits.open(file, mode="update") as hdul:
-                if obj_match_status == "CORRECTED":
-                    hdul[0].header["ORIG_OBJ"] = hdr["ORIG_OBJ"]
-                    hdul[0].header["OBJECT"] = true_name
-                hdul[0].header["OBJ_STAT"] = obj_match_status
+                    hdul[0].header["OBJ_STAT"] = status
+                    hdul.flush()
+
+        except Exception:
+            with fits.open(filepath, mode="update") as hdul:
+                hdul[0].header["OBJ_STAT"] = "ERROR"
                 hdul.flush()
 
-        # --- Guardar metadata ---
+    print(f"  Actualizados {updated} archivos con corrección de OBJECT")
 
-        row = {}
-        for key in keys:
-            if objects_df is not None and key == "OBJ_STAT":
-                row[key] = obj_match_status
-            elif key == "FILENAME":
-                row[key] = file.name
-            else:
-                row[key] = hdr.get(key)
-        values.append(row)
-
-    #header_str = ",".join(keys)
-    #np.savetxt(output_path, values, fmt="%s", delimiter=",", header=header_str)
-
-    df_new = pd.DataFrame(values, columns=keys)
-
-    # Si ya existe el CSV, preservar columnas extra (ej: QC_*)
-    if output_path.exists():
-        df_existing = pd.read_csv(output_path)
-
-        extra_cols = [c for c in df_existing.columns if c not in keys]
-
-        if extra_cols:
-            df_new = df_new.merge(
-                df_existing[["FILENAME"] + extra_cols],
-                on="FILENAME",
-                how="left"
-            )
-
-    df_new.to_csv(output_path, index=False)
-
-    return output_path  
+    return updated
 
 
 
 
-def load_dataset_objects(night_dir, output_file):
-    ds = pd.read_csv(Path(night_dir, output_file), usecols=["OBJECT"])
-    return [obj for obj in ds["OBJECT"].unique() if obj not in ["bias", "skyflat", "dark"]]
+def load_dataset_objects(night_dir, images):
+    night_objects = images.summary.to_pandas()["object"].unique()
+    return [obj for obj in night_objects if obj not in ["bias", "skyflat", "dark"]]
 
 # =============================================================================
 # Limpieza de archivos intermedios
@@ -598,7 +528,7 @@ from pathlib import Path
 from astropy.io import fits
 
 def flag_object_in_fov(
-    metadata_csv,
+    images,
     objects_csv,
     night_dir,
     overwrite=False
@@ -608,8 +538,8 @@ def flag_object_in_fov(
     cae dentro del FOV y escribe OBJ_IN = True/False en el header.
     """
 
-    meta = pd.read_csv(metadata_csv)
-    meta = meta[meta["ASTROMET"]=="yes"]
+    df = images.summary.to_pandas()
+    df = df[df["astromet"]=="yes"]
     objects = pd.read_csv(objects_csv)
 
     # Diccionario rápido nombre -> (ra, dec)
@@ -618,10 +548,10 @@ def flag_object_in_fov(
         for _, row in objects.iterrows()
     }
 
-    for _, row in tqdm(meta.iterrows(), total=len(meta), desc="Flagging objects in FOV"):
+    for _, row in tqdm(df.iterrows(), total=len(df), desc="Flagging objects in FOV"):
 
-        objname = row["OBJECT"]
-        filename = row["FILENAME"]
+        objname = row["object"]
+        filename = row["filename"]
         if objname not in obj_coords:
             print(f"Object = '{objname}' not found in catalog. (image={filename}")
             continue
@@ -637,7 +567,7 @@ def flag_object_in_fov(
 
             contains = object_in_fov(fits_path, ra_obj, dec_obj)
 
-            hdr["OBJ_IN"] = (
+            hdr["obj_in"] = (
                 bool(contains),
                 "Target object falls inside image FOV"
             )
@@ -649,3 +579,59 @@ def flag_object_in_fov(
         
 
         #print(f"   {fits_path.name}: OBJ_IN = {contains}")
+
+
+def cleanup_intermediate_files(path="."):
+    """
+    Elimina archivos intermedios de calibración:
+    - Imágenes bias-subtracted sin flat (B*.fits)
+    - Imágenes flat-subtracted sin CR cleaning (FB*.fits sin _crclean)
+    - Flats bias-subtracted
+    
+    Mantiene:
+    - Raw originales
+    - CR-cleaned finales (*_crclean.fits)
+    """
+    p = Path(path)
+    images = ImageFileCollection(p, keywords='*')
+    df = images.summary.to_pandas()
+
+    # 1) Borrar imágenes bias-subtracted sin flat (B*.fits)
+    print("   → Removing bias-subtracted images without flat...")
+    bias_only = df[
+        (df["imagetyp"] == "object") & 
+        (df["calibz"] == "subtracted bias") &
+        (df["calibf"] == "no") &
+        (df["astromet"] == "no") &
+        (df["crclean"] == "no")
+    ]["file"].values
+    
+    for img in bias_only:
+        remove_file(p / img)
+        print(f"      - {img}")
+    
+    # 2) Borrar imágenes flat-subtracted sin CR cleaning (FB*.fits)
+    print("   → Removing flat-corrected images without CR cleaning...")
+    flat_no_cr = df[
+        (df["imagetyp"] == "object") &
+        (df["calibf"] == "flat correction") &
+        (df["astromet"] == "no") &
+        (df["crclean"] == "no")
+    ]["file"].values
+    
+    for img in flat_no_cr:
+        remove_file(p / img)
+        print(f"      - {img}")
+
+    # 3) Borrar flats bias-subtracted
+    print("   → Removing bias-subtracted flats...")
+    flats_bias = df[
+        (df["imagetyp"] == "flat") & 
+        (df["calibz"] == "subtracted bias")
+    ]["file"].values
+    
+    for img in flats_bias:
+        remove_file(p / img)
+        print(f"      - {img}")
+    
+    print(f"   ✓ Cleanup complete. Removed {len(bias_only) + len(flat_no_cr) + len(flats_bias)} files")

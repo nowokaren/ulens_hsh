@@ -138,30 +138,35 @@ def apply_astrometry(input_fits, output_path, api_key="wuupmjpswkcbncws"):
 
     return output_fits
 
-def run_astrometry(dataset, output_dir, api_key, overwrite=True):
+def run_astrometry(images, api_key, overwrite=True):
     """
     Aplica astrometría a todas las imágenes científicas del dataset
     que no tengan WCS.
     """
 
-    output_dir = Path(output_dir)
-    images = dataset.get("images_flat", []) 
-    if len(images) == 0:
+    night_dir = images.location
+    df = images.summary.to_pandas()
+    calib_images = df[(df["imagetyp"]=="object")&(df["calibz"]!="no")
+                      &(df["calibf"]!="no")&(df["crclean"]=="True")
+                      &(df["astromet"]=="no")].file.values
+
+        
+    if len(calib_images) == 0:
         print("   → No science images with flat correction")
     
     results = []
 
-    for img in tqdm(images, desc="Applying astrometry"):
-        img = Path(img)
+    for img in tqdm(calib_images, desc="Applying astrometry"):
+        img = night_dir / img
+        out = night_dir / f"{img.stem}_wcs.fits"
 
-        out = output_dir / f"{img.stem}_wcs.fits"
 
         if out.exists() and not overwrite:
             print(f"   → Skipping existing {out}")
         else:    
             print(f"   → Processing {out}...")
             try:
-                result = apply_astrometry(img, output_dir, api_key)
+                result = apply_astrometry(img, night_dir, api_key)
                 results.append(result)
             except Exception as e:
                 print(f"   → Failed on {img.name}: {e}")
