@@ -29,3 +29,6 @@ ulens_hsh/combined_photometry_catalog.csv
 # Large local QC/output data
 ulens_hsh/metadata/espacio_qc/
 ulens_hsh/redutest/
+
+# Ignore all CSV files
+*.csv
